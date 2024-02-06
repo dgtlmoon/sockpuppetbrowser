@@ -20,4 +20,7 @@ This provides a Chrome interface to applications that need it, usually for examp
 when using Playwright - Playwright will launch a `node` instance and start issuing `CDP` (Chrome protocol)
 commands to drive the actual project. So you need this project.
 
+(Playwright gives a high-level command set, which talks to `node`, that `node` then does the low-level CDP
+commands to drive Chrome directly)
+
 Have fun!
