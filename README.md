@@ -23,4 +23,11 @@ commands to drive the actual project. So you need this project.
 (Playwright gives a high-level command set, which talks to `node`, that `node` then does the low-level CDP
 commands to drive Chrome directly)
 
+It is also more efficient to not need that extra `node` process like with some other systems 
+(you would end up with two node processes).
+
+### Future ideas
+
+- Some super cool "on the wire" hacks to add custom functionality to CDP, like issuing single commands to download files (PDF) to location https://github.com/dgtlmoon/changedetection.io/issues/2019
+
 Have fun!
