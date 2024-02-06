@@ -134,11 +134,12 @@ async def launchPlaywrightChromeProxy(websocket, path):
             return
 
     port = get_next_open_port()
+    # @todo use user-data-dir in query instead
+    tmp_user_data_dir = tempfile.mkdtemp(prefix="chrome-puppeteer-proxy", dir="/tmp")
     chrome_process = launch_chrome(port=port)
     closed = asyncio.ensure_future(websocket.wait_closed())
-
     closed.add_done_callback(lambda task: asyncio.ensure_future(
-        cleanup_chrome_by_pid(p=chrome_process, user_data_dir=user_data_dir, time_at_start=now, websocket=websocket))
+        cleanup_chrome_by_pid(p=chrome_process, user_data_dir=tmp_user_data_dir, time_at_start=now, websocket=websocket))
                              )
 
     # Wait for startup, @todo some smarter way to check the socket? check for errors?
@@ -150,8 +151,6 @@ async def launchPlaywrightChromeProxy(websocket, path):
     response = requests.get(f"http://localhost:{port}/json/version")
     websocket_url = response.json().get("webSocketDebuggerUrl")
     logger.debug(f"WebSocket ID: {websocket.id} proxying to local Chrome instance via CDP {websocket_url}")
-    # @todo use user-data-dir in query instead
-    user_data_dir = tempfile.mkdtemp(prefix="chrome-puppeteer-proxy", dir="/tmp")
 
     # 10mb, keep in mind theres screenshots.
     try:
