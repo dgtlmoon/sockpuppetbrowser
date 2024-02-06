@@ -30,7 +30,7 @@ It is also more efficient to not need that extra `node` process like with some o
 
 ## How to run
 
-`docker run -t --init --cap-add=SYS_ADMIN -p 3000:3000 dgtlmoon/sockpuppetbrowser`
+`docker run -t --init --cap-add=SYS_ADMIN -p 127.0.0.1:3000:3000 dgtlmoon/sockpuppetbrowser`
 
 ### Future ideas
 
