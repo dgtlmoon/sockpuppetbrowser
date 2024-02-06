@@ -1,25 +1,22 @@
 #!/usr/bin/env python3
 
-# websocket proxy
+# Auto scaling websocket proxy for Chrome CDP
 
+
+from loguru import logger
 import argparse
 import asyncio
-import random
-
-import websockets
 import os
-import time
+import random
 import requests
-import tempfile
-
-from aiohttp import web
-from loguru import logger
-import threading
 import subprocess
 import sys
+import tempfile
+import time
+import websockets
 
 connection_count = 0
-connection_count_max = 2
+connection_count_max = int(os.getenv('MAX_CONCURRENT_CHROME_PROCESSES', 10))
 connection_count_total = 0
 shutdown = False
 

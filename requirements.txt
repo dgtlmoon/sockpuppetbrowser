@@ -1,6 +1,6 @@
 aiohttp
 async-websocket-client
 loguru
-websockets
-requests
 psutil
+requests
+websockets
