@@ -11,6 +11,8 @@ import os
 import time
 import requests
 import tempfile
+
+from aiohttp import web
 from loguru import logger
 import threading
 import subprocess
@@ -21,8 +23,10 @@ connection_count_max = 2
 connection_count_total = 0
 shutdown = False
 
-# @todo some UI where you can change loglevel on a UI?
-# @todo some way to change connection threshold via UI
+
+# @todo Some UI where you can change loglevel on a UI?
+# @todo Some way to change connection threshold via UI
+# @todo Could have a configurable list of rotatable devtools endpoints?
 
 def launch_chrome(port=19222, user_data_dir="/tmp"):
     # needs chrome 121+ or so
@@ -85,14 +89,14 @@ def get_next_open_port(start=10000, end=60000):
     return r
 
 
-async def cleanup_chrome_by_pid(p, user_data_dir="/tmp", time_at_start=0.0):
+async def cleanup_chrome_by_pid(p, user_data_dir="/tmp", time_at_start=0.0, websocket: websockets.WebSocketServerProtocol = None):
     import signal
     import shutil
 
     global connection_count
     connection_count -= 1
 
-    logger.debug(f"Connection ended, processed in {time.time() - time_at_start:.3f}s cleaning up chrome pid: {p.pid}")
+    logger.debug(f"Websocket {websocket.id} - Connection ended, processed in {time.time() - time_at_start:.3f}s cleaning up chrome pid: {p.pid}")
     p.kill()
     p.communicate()
 
@@ -102,9 +106,9 @@ async def cleanup_chrome_by_pid(p, user_data_dir="/tmp", time_at_start=0.0):
     try:
         os.kill(p.pid, 0)
     except OSError:
-        logger.success(f"Looks like Chrome under PID {p.pid} died cleanly, good.")
+        logger.success(f"Websocket {websocket.id} - Chrome PID {p.pid} died cleanly, good.")
     else:
-        logger.error(f"Looks like {p.pid} didnt die, sending SIGKILL.")
+        logger.error(f"Websocket {websocket.id} - Looks like {p.pid} didnt die, sending SIGKILL.")
         os.kill(int(p.pid), signal.SIGKILL)
 
     # @todo context for cleaning up datadir? some auto-cleanup flag?
@@ -119,18 +123,26 @@ async def launchPlaywrightChromeProxy(websocket, path):
 
     now = time.time()
 
-    logger.debug(f"Got new incoming connection ID {websocket.id}")
+    logger.debug(f"WebSocket ID: {websocket.id} Got new incoming connection ID from {websocket.remote_address[0]}:{websocket.remote_address[1]}")
     connection_count += 1
     connection_count_total += 1
+    if connection_count > connection_count_max:
+        logger.warning(
+            f"WebSocket ID: {websocket.id} - Throttling/waiting, max connection limit reached {connection_count} of max {connection_count_max}")
 
     while connection_count > connection_count_max:
         await asyncio.sleep(3)
+        if time.time()-now > 120:
+            logger.critical(f"WebSocket ID: {websocket.id} - Waiting for existing connections took too long! dropping connection.")
+            return
 
     port = get_next_open_port()
     chrome_process = launch_chrome(port=port)
     closed = asyncio.ensure_future(websocket.wait_closed())
 
-    closed.add_done_callback(lambda task: cleanup_chrome_by_pid(p=chrome_process, user_data_dir=user_data_dir, time_at_start=now))
+    closed.add_done_callback(lambda task: asyncio.ensure_future(
+        cleanup_chrome_by_pid(p=chrome_process, user_data_dir=user_data_dir, time_at_start=now, websocket=websocket))
+                             )
 
     # Wait for startup, @todo some smarter way to check the socket? check for errors?
     # After spending hours trying to find a good non-blocking way to examine the stderr/stdin I couldnt find a solution
@@ -140,7 +152,7 @@ async def launchPlaywrightChromeProxy(websocket, path):
 
     response = requests.get(f"http://localhost:{port}/json/version")
     websocket_url = response.json().get("webSocketDebuggerUrl")
-    logger.debug(f"Proxying websocket ID {websocket.id} to Chrome CDP {websocket_url}")
+    logger.debug(f"WebSocket ID: {websocket.id} proxying to local Chrome instance via CDP {websocket_url}")
     # @todo use user-data-dir in query instead
     user_data_dir = tempfile.mkdtemp(prefix="chrome-puppeteer-proxy", dir="/tmp")
 
@@ -157,7 +169,8 @@ async def launchPlaywrightChromeProxy(websocket, path):
         logger.error(f"Something bad happened: when connecting to Chrome CDP at {websocket_url}")
         logger.error(e)
 
-    logger.success("Connection done!")
+    logger.success(f"Websocket {websocket.id} - Connection done!")
+
 
 async def hereToChromeCDP(ws, websocket):
     try:
@@ -188,6 +201,7 @@ async def stats_thread_func():
         if connection_count > connection_count_max:
             logger.warning(f"{connection_count} of max {connection_count_max} over threshold, incoming connections will be delayed.")
         await asyncio.sleep(20)
+
 
 if __name__ == '__main__':
     # Set a default logger level
