@@ -25,7 +25,19 @@ shutdown = False
 # @todo Some way to change connection threshold via UI
 # @todo Could have a configurable list of rotatable devtools endpoints?
 
-def launch_chrome(port=19222, user_data_dir="/tmp"):
+def getBrowserArgsFromQuery(query):
+    extra_args = []
+    from urllib.parse import urlparse, parse_qs
+    parsed_url = urlparse(query)
+    for k, v in parse_qs(parsed_url.query).items():
+        if k.startswith('--'):
+            extra_args.append(f"{k}={v[0]}")
+    return extra_args
+
+
+def launch_chrome(port=19222, user_data_dir="/tmp", url_query=""):
+    args = getBrowserArgsFromQuery(url_query)
+
     # needs chrome 121+ or so
     # Taken from a live Puppeteer
     chrome_run = [
@@ -37,7 +49,6 @@ def launch_chrome(port=19222, user_data_dir="/tmp"):
         "--hide-scrollbars",
         "--mute-audio",
         f"--remote-debugging-port={port}",
-        "--user-data-dir=/tmp/puppeteer_dev_chrome_profile-64lAN0",
         "--disable-background-timer-throttling",
         "--disable-backgrounding-occluded-windows",
         "--disable-breakpad",
@@ -67,6 +78,22 @@ def launch_chrome(port=19222, user_data_dir="/tmp"):
         "--use-mock-keychain",
     ]
 
+    chrome_run += args
+
+    # If window-size was not the query (it would be inserted above) so fall back to env vars
+    if not '--window-size' in url_query:
+        if os.getenv('SCREEN_WIDTH') and os.getenv('SCREEN_HEIGHT'):
+            screen_wh_arg=f"--window-size=f{int(os.getenv('SCREEN_WIDTH'))},{int(os.getenv('SCREEN_HEIGHT'))}"
+            logger.debug(f"No --window-size in start query, falling back to env var {screen_wh_arg}")
+            chrome_run.append(screen_wh_arg)
+        else:
+            logger.warning(f"No --window-size in query, and no SCREEN_HEIGHT + SCREEN_WIDTH env vars found :-(")
+
+    if not '--user-data-dir' in url_query:
+        tmp_user_data_dir = tempfile.mkdtemp(prefix="chrome-puppeteer-proxy", dir="/tmp")
+        chrome_run.append(f"--user-data-dir={tmp_user_data_dir}")
+        logger.debug(f"No user-data-dir in query, using {tmp_user_data_dir}")
+
     # start_new_session not (makes the main one keep running?)
     # Shell has to be false or it wont process the args
     process = subprocess.Popen(args=chrome_run, shell=False, stdout=subprocess.PIPE, stderr=subprocess.PIPE, bufsize=1,
@@ -93,7 +120,8 @@ async def cleanup_chrome_by_pid(p, user_data_dir="/tmp", time_at_start=0.0, webs
     global connection_count
     connection_count -= 1
 
-    logger.debug(f"Websocket {websocket.id} - Connection ended, processed in {time.time() - time_at_start:.3f}s cleaning up chrome pid: {p.pid}")
+    logger.debug(
+        f"Websocket {websocket.id} - Connection ended, processed in {time.time() - time_at_start:.3f}s cleaning up chrome pid: {p.pid}")
     p.kill()
     p.communicate()
 
@@ -120,7 +148,8 @@ async def launchPlaywrightChromeProxy(websocket, path):
 
     now = time.time()
 
-    logger.debug(f"WebSocket ID: {websocket.id} Got new incoming connection ID from {websocket.remote_address[0]}:{websocket.remote_address[1]}")
+    logger.debug(
+        f"WebSocket ID: {websocket.id} Got new incoming connection ID from {websocket.remote_address[0]}:{websocket.remote_address[1]}")
     connection_count += 1
     connection_count_total += 1
     if connection_count > connection_count_max:
@@ -129,17 +158,16 @@ async def launchPlaywrightChromeProxy(websocket, path):
 
     while connection_count > connection_count_max:
         await asyncio.sleep(3)
-        if time.time()-now > 120:
+        if time.time() - now > 120:
             logger.critical(f"WebSocket ID: {websocket.id} - Waiting for existing connections took too long! dropping connection.")
             return
 
     port = get_next_open_port()
-    # @todo use user-data-dir in query instead
-    tmp_user_data_dir = tempfile.mkdtemp(prefix="chrome-puppeteer-proxy", dir="/tmp")
-    chrome_process = launch_chrome(port=port)
+
+    chrome_process = launch_chrome(port=port, url_query=path)
     closed = asyncio.ensure_future(websocket.wait_closed())
     closed.add_done_callback(lambda task: asyncio.ensure_future(
-        cleanup_chrome_by_pid(p=chrome_process, user_data_dir=tmp_user_data_dir, time_at_start=now, websocket=websocket))
+        cleanup_chrome_by_pid(p=chrome_process, user_data_dir='@todo', time_at_start=now, websocket=websocket))
                              )
 
     # Wait for startup, @todo some smarter way to check the socket? check for errors?
@@ -149,6 +177,10 @@ async def launchPlaywrightChromeProxy(websocket, path):
     # https://chromedevtools.github.io/devtools-protocol/
 
     response = requests.get(f"http://localhost:{port}/json/version")
+    if not response.status_code == 200:
+        logger.critical(f"Uhoh! Looks like Chrome did not start! do you need --cap-add=SYS_ADMIN added to start this container?")
+        return
+
     websocket_url = response.json().get("webSocketDebuggerUrl")
     logger.debug(f"WebSocket ID: {websocket.id} proxying to local Chrome instance via CDP {websocket_url}")
 
