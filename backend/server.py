@@ -6,6 +6,7 @@
 from loguru import logger
 import argparse
 import asyncio
+import json
 import os
 import random
 import requests
@@ -213,6 +214,14 @@ async def chromeCDPtoPlaywright(ws, websocket):
     try:
         async for message in websocket:
             logger.trace(message[:1000])
+            if message.startswith("{") and message.endswith("}") and 'Page.navigate' in message:
+                try:
+                    m = json.loads(message)
+                    # Print out some debug so we know roughly whats going on
+                    logger.debug(f"{websocket.id} Page.navigate called to '{m['params']['url']}'")
+                except Exception as e:
+                    pass
+
             await ws.send(message)
     except Exception as e:
         logger.error(e)
@@ -233,7 +242,7 @@ async def stats_thread_func():
 
 if __name__ == '__main__':
     # Set a default logger level
-    logger_level = 'DEBUG'
+    logger_level = os.getenv('LOG_LEVEL', 'DEBUG')
     logger.remove()
     try:
         log_level_for_stdout = {'DEBUG', 'SUCCESS'}
