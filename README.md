@@ -26,6 +26,10 @@ commands to drive Chrome directly)
 It is also more efficient to not need that extra `node` process like with some other systems 
 (you would end up with two node processes).
 
+## How to run
+
+`docker run -t --init --cap-add=SYS_ADMIN -p 3000:3000 dgtlmoon/sockpuppetbrowser`
+
 ### Future ideas
 
 - Some super cool "on the wire" hacks to add custom functionality to CDP, like issuing single commands to download files (PDF) to location https://github.com/dgtlmoon/changedetection.io/issues/2019
