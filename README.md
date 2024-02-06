@@ -28,6 +28,9 @@ It is also more efficient to not need that extra `node` process like with some o
 
 `playwright -> node -> [sockpuppetserver] -> CDP protocol todo the browser business`
 
+Because this method is always built ontop of the latest puppeteer release, it's a lot more secure and reliable
+than relying on projects to invidually update their Chrome browsers and configurations.
+
 ## How to run
 
 `docker run -t --init --cap-add=SYS_ADMIN -p 127.0.0.1:3000:3000 dgtlmoon/sockpuppetbrowser`
