@@ -68,8 +68,8 @@ jobs:
           context: ./
           file: ./Dockerfile
           push: true
+#            ${{ secrets.DOCKER_HUB_USERNAME }}/sockpuppetbrowser:latest,ghcr.io/${{ github.repository }}:latest
           tags: |
-            #${{ secrets.DOCKER_HUB_USERNAME }}/sockpuppetbrowser:latest,ghcr.io/${{ github.repository }}:latest
             ${{ secrets.DOCKER_HUB_USERNAME }}/sockpuppetbrowser:latest
           platforms: linux/amd64,linux/arm64
           cache-from: type=gha
