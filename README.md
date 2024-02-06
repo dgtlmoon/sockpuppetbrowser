@@ -26,6 +26,8 @@ commands to drive Chrome directly)
 It is also more efficient to not need that extra `node` process like with some other systems 
 (you would end up with two node processes).
 
+`playwright -> node -> [sockpuppetserver] -> CDP protocol todo the browser business`
+
 ## How to run
 
 `docker run -t --init --cap-add=SYS_ADMIN -p 3000:3000 dgtlmoon/sockpuppetbrowser`
