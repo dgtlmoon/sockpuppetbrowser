@@ -59,8 +59,8 @@ jobs:
           version: latest
           driver-opts: image=moby/buildkit:master
 
-      # master branch -> :dev container tag
-      - name: Build and push :dev
+      # master branch -> :latest container tag
+      - name: Build and push :latest
         id: docker_build
         if: ${{ github.ref }} == "refs/heads/master"
         uses: docker/build-push-action@v5
@@ -69,7 +69,8 @@ jobs:
           file: ./Dockerfile
           push: true
           tags: |
-            ${{ secrets.DOCKER_HUB_USERNAME }}/sockpuppetbrowser:latest,ghcr.io/${{ github.repository }}:latest
+            #${{ secrets.DOCKER_HUB_USERNAME }}/sockpuppetbrowser:latest,ghcr.io/${{ github.repository }}:latest
+            ${{ secrets.DOCKER_HUB_USERNAME }}/sockpuppetbrowser:latest
           platforms: linux/amd64,linux/arm64
           cache-from: type=gha
           cache-to: type=gha,mode=max
