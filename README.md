@@ -3,7 +3,8 @@
 
 ## What is this?
 
-This is a docker image that simply exposes Puppeteer to the outside world via a websocket.
+This is a docker image that simply creates a Chrome browser on demand and exposes that Chrome's CDP protocol 
+(which is what Puppeteer and other systems want to connect to - to the outside world via a websocket.
 
 When ever something requiring puppeteer connects via `ws://..` it will spin up a new Chrome browser
 instance and connect you through (proxy you through) to that Chrome's DevTools connection.
@@ -18,5 +19,24 @@ that we can be sure that all the basic configuration required for Chrome to work
 This provides a Chrome interface to applications that need it, usually for example as required 
 when using Playwright - Playwright will launch a `node` instance and start issuing `CDP` (Chrome protocol)
 commands to drive the actual project. So you need this project.
+
+(Playwright gives a high-level command set, which talks to `node`, that `node` then does the low-level CDP
+commands to drive Chrome directly)
+
+It is also more efficient to not need that extra `node` process like with some other systems 
+(you would end up with two node processes).
+
+`playwright -> node -> [sockpuppetserver] -> CDP protocol todo the browser business`
+
+Because this method is always built ontop of the latest puppeteer release, it's a lot more secure and reliable
+than relying on projects to invidually update their Chrome browsers and configurations.
+
+## How to run
+
+`docker run -t --init --cap-add=SYS_ADMIN -p 127.0.0.1:3000:3000 dgtlmoon/sockpuppetbrowser`
+
+### Future ideas
+
+- Some super cool "on the wire" hacks to add custom functionality to CDP, like issuing single commands to download files (PDF) to location https://github.com/dgtlmoon/changedetection.io/issues/2019
 
 Have fun!
