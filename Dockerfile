@@ -3,7 +3,7 @@ FROM ghcr.io/puppeteer/puppeteer:latest
 # docker run -it -v `pwd`:/tmp/server -i --init --cap-add=SYS_ADMIN test bash
 
 USER root
-RUN mkdir /app && chown pptruser.pptruser /app
+RUN mkdir /app && chown pptruser:pptruser /app
 RUN apt-get update && apt-get install python3-pip python3-venv -y
 USER pptruser
 WORKDIR /app
