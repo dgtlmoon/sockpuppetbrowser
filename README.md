@@ -3,8 +3,8 @@
 
 ## What is this?
 
-This is a docker image that simply exposes Chrome's CDP protocol (which is what Puppeteer and other 
-systems want to connect to - to the outside world via a websocket.
+This is a docker image that simply creates a Chrome browser on demand and exposes that Chrome's CDP protocol 
+(which is what Puppeteer and other systems want to connect to - to the outside world via a websocket.
 
 When ever something requiring puppeteer connects via `ws://..` it will spin up a new Chrome browser
 instance and connect you through (proxy you through) to that Chrome's DevTools connection.
