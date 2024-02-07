@@ -279,7 +279,7 @@ async def stats_thread_func():
 
 if __name__ == '__main__':
     # Set a default logger level
-    logger_level = os.getenv('LOG_LEVEL', 'TRACE')
+    logger_level = os.getenv('LOG_LEVEL', 'DEBUG')
     logger.remove()
     try:
         log_level_for_stdout = {'DEBUG', 'SUCCESS'}
