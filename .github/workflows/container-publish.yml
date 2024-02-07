@@ -6,24 +6,9 @@ on:
       - master
 
 jobs:
-  metadata:
-    runs-on: ubuntu-latest
-    steps:
-    - name: Show metadata
-      run: |
-        echo SHA ${{ github.sha }}
-        echo github.ref:  ${{ github.ref }}
-        echo github_ref: $GITHUB_REF
-        echo Event name: ${{ github.event_name }}
-        echo Ref ${{ github.ref }}
-        echo c: ${{ github.event.workflow_run.conclusion }}
-        echo r: ${{ github.event.workflow_run }}
-        echo tname: "${{ github.event.release.tag_name }}"
-        echo headbranch: -${{ github.event.workflow_run.head_branch }}-
-        set
-  build-container-test:
-    runs-on: ubuntu-latest
-    steps:
+
+  docker-login-setup:
+    runs-on: ubuntu-latest 
       - uses: actions/checkout@v4
       - name: Set up Python 3.11
         uses: actions/setup-python@v5
@@ -36,6 +21,18 @@ jobs:
           image: tonistiigi/binfmt:latest
           platforms: all
 
+      - name: Set up Docker Buildx
+        id: buildx
+        uses: docker/setup-buildx-action@v3
+        with:
+          install: true
+          version: latest
+          driver-opts: image=moby/buildkit:master
+
+  build-container-test:
+    needs: [docker-login-setup]
+    runs-on: ubuntu-latest
+    steps:
       - name: Build container for test
         id: docker_build
         uses: docker/build-push-action@v5
@@ -52,38 +49,11 @@ jobs:
     needs: [build-container-test]
     runs-on: ubuntu-latest
     steps:
-#      - uses: actions/checkout@v4
-#      - name: Set up Python 3.11
-#        uses: actions/setup-python@v5
-#        with:
-#          python-version: 3.11
-
-      - name: Set up QEMU
-        uses: docker/setup-qemu-action@v3
-        with:
-          image: tonistiigi/binfmt:latest
-          platforms: all
-
-      - name: Login to GitHub Container Registry
-        uses: docker/login-action@v3
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
       - name: Login to Docker Hub Container Registry
         uses: docker/login-action@v3
         with:
           username: ${{ secrets.DOCKER_HUB_USERNAME }}
           password: ${{ secrets.DOCKER_HUB_ACCESS_TOKEN }}
-
-      - name: Set up Docker Buildx
-        id: buildx
-        uses: docker/setup-buildx-action@v3
-        with:
-          install: true
-          version: latest
-          driver-opts: image=moby/buildkit:master
 
       # master branch -> :latest container tag
       - name: Build and push :latest
