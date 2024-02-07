@@ -25,6 +25,7 @@ shutdown = False
 # @todo Some UI where you can change loglevel on a UI?
 # @todo Some way to change connection threshold via UI
 # @todo Could have a configurable list of rotatable devtools endpoints?
+# @todo Add `ulimit` config for max-memory-per-chrome
 
 def getBrowserArgsFromQuery(query):
     extra_args = []
@@ -37,12 +38,12 @@ def getBrowserArgsFromQuery(query):
 
 
 def launch_chrome(port=19222, user_data_dir="/tmp", url_query=""):
-    args = getBrowserArgsFromQuery(url_query)
 
-    # needs chrome 121+ or so
-    # Taken from a live Puppeteer
+    args = getBrowserArgsFromQuery(url_query)
+    chrome_location = "/usr/bin/google-chrome"
+    # Needs chrome 121+ or so, Defaults taken from a live Puppeteer
     chrome_run = [
-        "/usr/bin/google-chrome",
+        chrome_location,
         "--allow-pre-commit-input",
         "--disable-background-networking",
         "--enable-features=NetworkServiceInProcess2",
@@ -97,8 +98,14 @@ def launch_chrome(port=19222, user_data_dir="/tmp", url_query=""):
 
     # start_new_session not (makes the main one keep running?)
     # Shell has to be false or it wont process the args
-    process = subprocess.Popen(args=chrome_run, shell=False, stdout=subprocess.PIPE, stderr=subprocess.PIPE, bufsize=1,
-                               universal_newlines=True)
+    try:
+        process = subprocess.Popen(args=chrome_run, shell=False, stdout=subprocess.PIPE, stderr=subprocess.PIPE, bufsize=1,
+                                   universal_newlines=True)
+    except FileNotFoundError as e:
+        logger.critical(f"Chrome binary was not found at {chrome_location}, aborting!")
+        raise e
+
+    # Check if the process crashed on startup, print some debug if it did
     return process
 
 
@@ -116,7 +123,6 @@ def get_next_open_port(start=10000, end=60000):
 
 async def cleanup_chrome_by_pid(p, user_data_dir="/tmp", time_at_start=0.0, websocket: websockets.WebSocketServerProtocol = None):
     import signal
-    import shutil
 
     global connection_count
     connection_count -= 1
@@ -124,9 +130,11 @@ async def cleanup_chrome_by_pid(p, user_data_dir="/tmp", time_at_start=0.0, webs
     logger.debug(
         f"Websocket {websocket.id} - Connection ended, processed in {time.time() - time_at_start:.3f}s cleaning up chrome pid: {p.pid}")
     p.kill()
+    # Flush IO queue
     p.communicate()
 
-    # @todo while not dead try for 10 sec..
+    # @todo while not dead try for 10 sec..,
+    # does the pid disappear when killed?
     await asyncio.sleep(2)
 
     try:
@@ -140,6 +148,21 @@ async def cleanup_chrome_by_pid(p, user_data_dir="/tmp", time_at_start=0.0, webs
     # @todo context for cleaning up datadir? some auto-cleanup flag?
     # shutil.rmtree(user_data_dir)
 
+async def _request_retry(url, num_retries=20, success_list=[200, 404], **kwargs):
+    # On a healthy machine with no load, Chrome is usually fired up in 100ms
+    await asyncio.sleep(0.1)
+    for _ in range(num_retries):
+        try:
+            response = requests.get(url, **kwargs)
+            if response.status_code in success_list:
+                ## Return response if successful
+                return response
+        except requests.exceptions.ConnectionError:
+            logger.warning("No response from Chrome, retrying..")
+            await asyncio.sleep(0.2)
+            pass
+
+    raise requests.exceptions.ConnectionError
 
 async def launchPlaywrightChromeProxy(websocket, path):
     '''Called whenever a new connection is made to the server, Incoming connection, connect to CDP and start proxying'''
@@ -150,7 +173,7 @@ async def launchPlaywrightChromeProxy(websocket, path):
     now = time.time()
 
     logger.debug(
-        f"WebSocket ID: {websocket.id} Got new incoming connection ID from {websocket.remote_address[0]}:{websocket.remote_address[1]}")
+        f"WebSocket ID: {websocket.id} Got new incoming connection ID from {websocket.remote_address[0]}:{websocket.remote_address[1]} ({path})")
     connection_count += 1
     connection_count_total += 1
     if connection_count > connection_count_max:
@@ -163,39 +186,53 @@ async def launchPlaywrightChromeProxy(websocket, path):
             logger.critical(f"WebSocket ID: {websocket.id} - Waiting for existing connections took too long! dropping connection.")
             return
 
-    port = get_next_open_port()
+    now_before_chrome_launch = time.time()
 
+    port = get_next_open_port()
     chrome_process = launch_chrome(port=port, url_query=path)
+
     closed = asyncio.ensure_future(websocket.wait_closed())
     closed.add_done_callback(lambda task: asyncio.ensure_future(
         cleanup_chrome_by_pid(p=chrome_process, user_data_dir='@todo', time_at_start=now, websocket=websocket))
                              )
 
-    # Wait for startup, @todo some smarter way to check the socket? check for errors?
-    # After spending hours trying to find a good non-blocking way to examine the stderr/stdin I couldnt find a solution
-    await asyncio.sleep(3)
-
+    chrome_json_info_url = f"http://localhost:{port}/json/version"
     # https://chromedevtools.github.io/devtools-protocol/
-
-    response = requests.get(f"http://localhost:{port}/json/version")
-    if not response.status_code == 200:
+    try:
+        # Define the retry strategy
+        response = await _request_retry(chrome_json_info_url)
+        if not response.status_code == 200:
+            logger.critical(f"Chrome did not report the correct list of interfaces to at {chrome_json_info_url}, aborting :(")
+            # @todo return 500 with text
+            return
+    except requests.exceptions.ConnectionError as e:
+        # Instead of trying to analyse the output in a non-blocking way, we can assume that if we cant connect that something went wrong.
         logger.critical(f"Uhoh! Looks like Chrome did not start! do you need --cap-add=SYS_ADMIN added to start this container?")
+        logger.critical(f"While trying to connect to {chrome_json_info_url} - {str(e)}")
+        process_output = chrome_process.communicate()
+        logger.critical(f"STDOUT '{process_output[0]}'")
+        logger.critical(f"STDERR '{process_output[1]}'")
+        chrome_process.terminate()
         return
 
-    websocket_url = response.json().get("webSocketDebuggerUrl")
-    logger.debug(f"WebSocket ID: {websocket.id} proxying to local Chrome instance via CDP {websocket_url}")
+    # On exception, flush and print debug
+
+    logger.trace(f"WebSocket ID: {websocket.id} time to launch browser {time.time() - now_before_chrome_launch:.3f}s ")
+
+    chrome_websocket_url = response.json().get("webSocketDebuggerUrl")
+    logger.debug(f"WebSocket ID: {websocket.id} proxying to local Chrome instance via CDP {chrome_websocket_url}")
 
     # 10mb, keep in mind theres screenshots.
     try:
-        async with websockets.connect(websocket_url, max_size=1024 * 1024 * 10) as ws:
+        async with websockets.connect(chrome_websocket_url, max_size=1024 * 1024 * 10) as ws:
             taskA = asyncio.create_task(hereToChromeCDP(ws, websocket))
             taskB = asyncio.create_task(chromeCDPtoPlaywright(ws, websocket))
             await taskA
             await taskB
     except TimeoutError as e:
-        logger.error(f"Connection Timeout Out when connecting to Chrome CDP at {websocket_url}")
+        logger.error(f"Connection Timeout Out when connecting to Chrome CDP at {chrome_websocket_url}")
     except Exception as e:
-        logger.error(f"Something bad happened: when connecting to Chrome CDP at {websocket_url}")
+        logger.error(f"Something bad happened: when connecting to Chrome CDP at {chrome_websocket_url}")
         logger.error(e)
 
     logger.success(f"Websocket {websocket.id} - Connection done!")
@@ -242,7 +279,7 @@ async def stats_thread_func():
 
 if __name__ == '__main__':
     # Set a default logger level
-    logger_level = os.getenv('LOG_LEVEL', 'DEBUG')
+    logger_level = os.getenv('LOG_LEVEL', 'TRACE')
     logger.remove()
     try:
         log_level_for_stdout = {'DEBUG', 'SUCCESS'}
@@ -271,7 +308,7 @@ if __name__ == '__main__':
     asyncio.get_event_loop().run_until_complete(start_server)
 
     try:
-        logger.success(f"Starting puppeteer proxy on ws://{args.host}:{args.port}")
+        logger.success(f"Starting Chrome proxy, Listening on ws://{args.host}:{args.port}")
         asyncio.get_event_loop().run_forever()
 
 
