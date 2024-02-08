@@ -65,6 +65,12 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
+      - name: Run container and execute test
+        run: |
+          
+          pip3 install -r test/requirements.txt
+          python3 test/test.py
+
   build-push-containers:
     needs: [build-container-test]
     runs-on: ubuntu-latest

@@ -26,6 +26,7 @@ shutdown = False
 # @todo Some way to change connection threshold via UI
 # @todo Could have a configurable list of rotatable devtools endpoints?
 # @todo Add `ulimit` config for max-memory-per-chrome
+# @todo manage a hard 'MAX_CHROME_RUN_TIME` default 60sec
 
 def getBrowserArgsFromQuery(query):
     extra_args = []
@@ -40,7 +41,8 @@ def getBrowserArgsFromQuery(query):
 def launch_chrome(port=19222, user_data_dir="/tmp", url_query=""):
 
     args = getBrowserArgsFromQuery(url_query)
-    chrome_location = "/usr/bin/google-chrome"
+    # CHROME_BIN set in Dockerfile
+    chrome_location = os.getenv("CHROME_BIN", "/usr/bin/google-chrome")
     # Needs chrome 121+ or so, Defaults taken from a live Puppeteer
     chrome_run = [
         chrome_location,
@@ -308,7 +310,8 @@ if __name__ == '__main__':
     asyncio.get_event_loop().run_until_complete(start_server)
 
     try:
-        logger.success(f"Starting Chrome proxy, Listening on ws://{args.host}:{args.port}")
+        chrome_path  = os.getenv("CHROME_BIN", "/usr/bin/google-chrome")
+        logger.success(f"Starting Chrome proxy, Listening on ws://{args.host}:{args.port} -> {chrome_path}")
         asyncio.get_event_loop().run_forever()
 
 
