@@ -272,7 +272,7 @@ async def stats_thread_func():
     global shutdown
 
     while True:
-        logger.info(f"Connection count: {connection_count} of max {connection_count_max}")
+        logger.info(f"Current connection count: {connection_count} of max {connection_count_max}")
         logger.info(f"Total connections processed: {connection_count_total}")
         if connection_count > connection_count_max:
             logger.warning(f"{connection_count} of max {connection_count_max} over threshold, incoming connections will be delayed.")

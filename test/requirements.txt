@@ -1,2 +1,0 @@
-pyppeteer
-memory_profiler
