@@ -6,6 +6,9 @@
 This is a docker image that simply creates a Chrome browser on demand and exposes that Chrome's CDP protocol 
 (which is what Puppeteer and other systems want to connect to) - to the outside world via a websocket.
 
+It is based on the excellent https://github.com/Zenika/alpine-chrome, and we add our own wrapper to launch
+individual chrome instances on demand.
+
 When ever something requiring puppeteer connects via `ws://..` it will spin up a new Chrome browser
 instance and connect you through (proxy you through) to that Chrome's DevTools connection.
 
@@ -33,7 +36,9 @@ than relying on projects to invidually update their Chrome browsers and configur
 
 ## How to run
 
-`docker run -t --init --cap-add=SYS_ADMIN -p 127.0.0.1:3000:3000 dgtlmoon/sockpuppetbrowser`
+`docker run --rm --security-opt seccomp=$(pwd)/chrome.json -p 127.0.0.1:3000:3000 dgtlmoon/sockpuppetbrowser`
+
+`seccomp` is _highly_ recommended https://github.com/Zenika/alpine-chrome?tab=readme-ov-file#-the-best-with-seccomp
 
 ### Future ideas
 
