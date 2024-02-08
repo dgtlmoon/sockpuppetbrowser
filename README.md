@@ -34,6 +34,10 @@ It is also more efficient to not need that extra `node` process like with some o
 Because this method is always built ontop of the latest puppeteer release, it's a lot more secure and reliable
 than relying on projects to invidually update their Chrome browsers and configurations.
 
+You can skip the whole `python` -> `node` mess by using https://github.com/pyppeteer/pyppeteer and talk to this 
+container directly.
+
+
 ## How to run
 
 `docker run --rm --security-opt seccomp=$(pwd)/chrome.json -p 127.0.0.1:3000:3000 dgtlmoon/sockpuppetbrowser`
