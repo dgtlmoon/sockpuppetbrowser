@@ -22,7 +22,7 @@ connection_count_max = int(os.getenv('MAX_CONCURRENT_CHROME_PROCESSES', 10))
 connection_count_total = 0
 shutdown = False
 memory_use_limit_percent = int(os.getenv('HARD_MEMORY_USAGE_LIMIT_PERCENT', 90))
-
+stats_refresh_time = int(os.getenv('STATS_REFRESH_SECONDS', 10))
 
 # @todo Some UI where you can change loglevel on a UI?
 # @todo Some way to change connection threshold via UI
@@ -301,7 +301,7 @@ async def stats_thread_func():
         svmem = psutil.virtual_memory()
         logger.info(f"Memory: Used {svmem.percent}% (Limit {memory_use_limit_percent}%) - Available {svmem.free / 1024 / 1024:.1f}MB ")
 
-        await asyncio.sleep(20)
+        await asyncio.sleep(stats_refresh_time)
 
 
 if __name__ == '__main__':
