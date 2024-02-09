@@ -200,7 +200,7 @@ async def launchPlaywrightChromeProxy(websocket, path):
         await asyncio.sleep(5)
         if time.time() - now > 60:
             logger.critical(
-                f"WebSocket ID: {websocket.id} - Too long waiting for memory usage to drop, dropping connection. {svmem.percent}% was > {memory_use_limit_percent}  ({time.time() - now:.1f}s)%")
+                f"WebSocket ID: {websocket.id} - Too long waiting for memory usage to drop, dropping connection. {svmem.percent}% was > {memory_use_limit_percent}%  ({time.time() - now:.1f}s)")
             return
 
     while connection_count > connection_count_max:
