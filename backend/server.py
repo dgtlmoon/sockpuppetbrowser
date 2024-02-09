@@ -293,13 +293,12 @@ async def stats_thread_func():
     global shutdown
 
     while True:
-        logger.info(f"Current connection count: {connection_count} of max {connection_count_max}")
-        logger.info(f"Total connections processed: {connection_count_total}")
+        logger.info(f"Connections: Active count {connection_count} of max {connection_count_max}, Total processed: {connection_count_total}.")
         if connection_count > connection_count_max:
             logger.warning(f"{connection_count} of max {connection_count_max} over threshold, incoming connections will be delayed.")
 
         svmem = psutil.virtual_memory()
-        logger.info(f"Memory: Used {svmem.percent}% (Limit {memory_use_limit_percent}%) - Available {svmem.free / 1024 / 1024:.1f}MB ")
+        logger.info(f"Memory: Used {svmem.percent}% (Limit {memory_use_limit_percent}%) - Available {svmem.free / 1024 / 1024:.1f}MB.")
 
         await asyncio.sleep(stats_refresh_time)
 
