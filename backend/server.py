@@ -29,6 +29,7 @@ memory_use_limit_percent = int(os.getenv('HARD_MEMORY_USAGE_LIMIT_PERCENT', 90))
 # @todo Could have a configurable list of rotatable devtools endpoints?
 # @todo Add `ulimit` config for max-memory-per-chrome
 # @todo manage a hard 'MAX_CHROME_RUN_TIME` default 60sec
+# @todo use chrome remote debug by unix pipe, instead of socket
 
 def getBrowserArgsFromQuery(query):
     extra_args = []
@@ -45,14 +46,15 @@ def launch_chrome(port=19222, user_data_dir="/tmp", url_query=""):
     # CHROME_BIN set in Dockerfile
     chrome_location = os.getenv("CHROME_BIN", "/usr/bin/google-chrome")
     # Needs chrome 121+ or so, Defaults taken from a live Puppeteer
+    # https://github.com/GoogleChrome/chrome-launcher/blob/main/docs/chrome-flags-for-tools.md
     chrome_run = [
         chrome_location,
         "--allow-pre-commit-input",
         "--disable-background-networking",
         "--enable-features=NetworkServiceInProcess2",
         "--headless",
-        "--hide-scrollbars",
-        "--mute-audio",
+#        "--hide-scrollbars",
+#        "--mute-audio",
         f"--remote-debugging-port={port}",
         "--disable-background-timer-throttling",
         "--disable-backgrounding-occluded-windows",
@@ -88,7 +90,7 @@ def launch_chrome(port=19222, user_data_dir="/tmp", url_query=""):
     # If window-size was not the query (it would be inserted above) so fall back to env vars
     if not '--window-size' in url_query:
         if os.getenv('SCREEN_WIDTH') and os.getenv('SCREEN_HEIGHT'):
-            screen_wh_arg = f"--window-size=f{int(os.getenv('SCREEN_WIDTH'))},{int(os.getenv('SCREEN_HEIGHT'))}"
+            screen_wh_arg=f"--window-size={int(os.getenv('SCREEN_WIDTH'))},{int(os.getenv('SCREEN_HEIGHT'))}"
             logger.debug(f"No --window-size in start query, falling back to env var {screen_wh_arg}")
             chrome_run.append(screen_wh_arg)
         else:
