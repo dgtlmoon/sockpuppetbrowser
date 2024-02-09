@@ -87,7 +87,7 @@ def launch_chrome(port=19222, user_data_dir="/tmp", url_query=""):
     # If window-size was not the query (it would be inserted above) so fall back to env vars
     if not '--window-size' in url_query:
         if os.getenv('SCREEN_WIDTH') and os.getenv('SCREEN_HEIGHT'):
-            screen_wh_arg=f"--window-size=f{int(os.getenv('SCREEN_WIDTH'))},{int(os.getenv('SCREEN_HEIGHT'))}"
+            screen_wh_arg=f"--window-size={int(os.getenv('SCREEN_WIDTH'))},{int(os.getenv('SCREEN_HEIGHT'))}"
             logger.debug(f"No --window-size in start query, falling back to env var {screen_wh_arg}")
             chrome_run.append(screen_wh_arg)
         else:
