@@ -27,6 +27,7 @@ shutdown = False
 # @todo Could have a configurable list of rotatable devtools endpoints?
 # @todo Add `ulimit` config for max-memory-per-chrome
 # @todo manage a hard 'MAX_CHROME_RUN_TIME` default 60sec
+# @todo use chrome remote debug by unix pipe, instead of socket
 
 def getBrowserArgsFromQuery(query):
     extra_args = []
