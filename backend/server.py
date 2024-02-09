@@ -8,6 +8,7 @@ import argparse
 import asyncio
 import json
 import os
+import psutil
 import random
 import requests
 import subprocess
@@ -20,6 +21,7 @@ connection_count = 0
 connection_count_max = int(os.getenv('MAX_CONCURRENT_CHROME_PROCESSES', 10))
 connection_count_total = 0
 shutdown = False
+memory_use_limit_percent = int(os.getenv('HARD_MEMORY_USAGE_LIMIT_PERCENT', 90))
 
 
 # @todo Some UI where you can change loglevel on a UI?
@@ -39,7 +41,6 @@ def getBrowserArgsFromQuery(query):
 
 
 def launch_chrome(port=19222, user_data_dir="/tmp", url_query=""):
-
     args = getBrowserArgsFromQuery(url_query)
     # CHROME_BIN set in Dockerfile
     chrome_location = os.getenv("CHROME_BIN", "/usr/bin/google-chrome")
@@ -87,7 +88,7 @@ def launch_chrome(port=19222, user_data_dir="/tmp", url_query=""):
     # If window-size was not the query (it would be inserted above) so fall back to env vars
     if not '--window-size' in url_query:
         if os.getenv('SCREEN_WIDTH') and os.getenv('SCREEN_HEIGHT'):
-            screen_wh_arg=f"--window-size=f{int(os.getenv('SCREEN_WIDTH'))},{int(os.getenv('SCREEN_HEIGHT'))}"
+            screen_wh_arg = f"--window-size=f{int(os.getenv('SCREEN_WIDTH'))},{int(os.getenv('SCREEN_HEIGHT'))}"
             logger.debug(f"No --window-size in start query, falling back to env var {screen_wh_arg}")
             chrome_run.append(screen_wh_arg)
         else:
@@ -122,15 +123,18 @@ def get_next_open_port(start=10000, end=60000):
 
     return r
 
-
-async def cleanup_chrome_by_pid(p, user_data_dir="/tmp", time_at_start=0.0, websocket: websockets.WebSocketServerProtocol = None):
-    import signal
-
+async def stats_disconnect(time_at_start=0.0, websocket: websockets.WebSocketServerProtocol = None):
     global connection_count
     connection_count -= 1
 
     logger.debug(
-        f"Websocket {websocket.id} - Connection ended, processed in {time.time() - time_at_start:.3f}s cleaning up chrome pid: {p.pid}")
+        f"Websocket {websocket.id} - Connection ended, processed in {time.time() - time_at_start:.3f}s")
+
+async def cleanup_chrome_by_pid(p, user_data_dir="/tmp", time_at_start=0.0, websocket: websockets.WebSocketServerProtocol = None):
+    import signal
+
+    logger.debug(
+        f"Websocket {websocket.id} - Cleaning up chrome pid: {p.pid}")
     p.kill()
     # Flush IO queue
     p.communicate()
@@ -166,6 +170,7 @@ async def _request_retry(url, num_retries=20, success_list=[200, 404], **kwargs)
 
     raise requests.exceptions.ConnectionError
 
+
 async def launchPlaywrightChromeProxy(websocket, path):
     '''Called whenever a new connection is made to the server, Incoming connection, connect to CDP and start proxying'''
     global connection_count
@@ -173,19 +178,34 @@ async def launchPlaywrightChromeProxy(websocket, path):
     global connection_count_total
 
     now = time.time()
+    closed = asyncio.ensure_future(websocket.wait_closed())
+    closed.add_done_callback(lambda task: asyncio.ensure_future(stats_disconnect(time_at_start=now, websocket=websocket)))
+
+    svmem = psutil.virtual_memory()
 
     logger.debug(
         f"WebSocket ID: {websocket.id} Got new incoming connection ID from {websocket.remote_address[0]}:{websocket.remote_address[1]} ({path})")
+
     connection_count += 1
     connection_count_total += 1
+
     if connection_count > connection_count_max:
         logger.warning(
-            f"WebSocket ID: {websocket.id} - Throttling/waiting, max connection limit reached {connection_count} of max {connection_count_max}")
+            f"WebSocket ID: {websocket.id} - Throttling/waiting, max connection limit reached {connection_count} of max {connection_count_max}  ({time.time() - now:.1f}s)")
+
+    while svmem.percent > memory_use_limit_percent:
+        logger.warning(f"WebSocket ID: {websocket.id} - {svmem.percent}% was > {memory_use_limit_percent}%.. delaying connecting and waiting for more free RAM  ({time.time() - now:.1f}s)")
+        await asyncio.sleep(5)
+        if time.time() - now > 60:
+            logger.critical(
+                f"WebSocket ID: {websocket.id} - Too long waiting for memory usage to drop, dropping connection. {svmem.percent}% was > {memory_use_limit_percent}  ({time.time() - now:.1f}s)%")
+            return
 
     while connection_count > connection_count_max:
         await asyncio.sleep(3)
         if time.time() - now > 120:
-            logger.critical(f"WebSocket ID: {websocket.id} - Waiting for existing connections took too long! dropping connection.")
+            logger.critical(
+                f"WebSocket ID: {websocket.id} - Waiting for existing connection count to drop took too long! dropping connection. ({time.time() - now:.1f}s)")
             return
 
     now_before_chrome_launch = time.time()
@@ -193,7 +213,6 @@ async def launchPlaywrightChromeProxy(websocket, path):
     port = get_next_open_port()
     chrome_process = launch_chrome(port=port, url_query=path)
 
-    closed = asyncio.ensure_future(websocket.wait_closed())
     closed.add_done_callback(lambda task: asyncio.ensure_future(
         cleanup_chrome_by_pid(p=chrome_process, user_data_dir='@todo', time_at_start=now, websocket=websocket))
                              )
@@ -276,6 +295,10 @@ async def stats_thread_func():
         logger.info(f"Total connections processed: {connection_count_total}")
         if connection_count > connection_count_max:
             logger.warning(f"{connection_count} of max {connection_count_max} over threshold, incoming connections will be delayed.")
+
+        svmem = psutil.virtual_memory()
+        logger.info(f"Memory: Used {svmem.percent}% (Limit {memory_use_limit_percent}%) - Available {svmem.free / 1024 / 1024:.1f}MB ")
+
         await asyncio.sleep(20)
 
 
@@ -310,7 +333,7 @@ if __name__ == '__main__':
     asyncio.get_event_loop().run_until_complete(start_server)
 
     try:
-        chrome_path  = os.getenv("CHROME_BIN", "/usr/bin/google-chrome")
+        chrome_path = os.getenv("CHROME_BIN", "/usr/bin/google-chrome")
         logger.success(f"Starting Chrome proxy, Listening on ws://{args.host}:{args.port} -> {chrome_path}")
         asyncio.get_event_loop().run_forever()
 
