@@ -44,14 +44,15 @@ def launch_chrome(port=19222, user_data_dir="/tmp", url_query=""):
     # CHROME_BIN set in Dockerfile
     chrome_location = os.getenv("CHROME_BIN", "/usr/bin/google-chrome")
     # Needs chrome 121+ or so, Defaults taken from a live Puppeteer
+    # https://github.com/GoogleChrome/chrome-launcher/blob/main/docs/chrome-flags-for-tools.md
     chrome_run = [
         chrome_location,
         "--allow-pre-commit-input",
         "--disable-background-networking",
         "--enable-features=NetworkServiceInProcess2",
         "--headless",
-        "--hide-scrollbars",
-        "--mute-audio",
+#        "--hide-scrollbars",
+#        "--mute-audio",
         f"--remote-debugging-port={port}",
         "--disable-background-timer-throttling",
         "--disable-backgrounding-occluded-windows",
