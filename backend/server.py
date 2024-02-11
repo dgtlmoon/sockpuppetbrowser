@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+from distutils.util import strtobool
 
 # Auto scaling websocket proxy for Chrome CDP
 
@@ -23,6 +24,9 @@ connection_count_total = 0
 shutdown = False
 memory_use_limit_percent = int(os.getenv('HARD_MEMORY_USAGE_LIMIT_PERCENT', 90))
 stats_refresh_time = int(os.getenv('STATS_REFRESH_SECONDS', 10))
+
+# When we are over memory limit or hit connection_count_max
+DROP_EXCESS_CONNECTIONS = strtobool(os.getenv('DROP_EXCESS_CONNECTIONS', 'False'))
 
 # @todo Some UI where you can change loglevel on a UI?
 # @todo Some way to change connection threshold via UI
@@ -210,22 +214,25 @@ async def launchPlaywrightChromeProxy(websocket, path):
         logger.warning(
             f"WebSocket ID: {websocket.id} - Throttling/waiting, max connection limit reached {connection_count} of max {connection_count_max}  ({time.time() - now:.1f}s)")
 
-    while svmem.percent > memory_use_limit_percent:
-        logger.warning(f"WebSocket ID: {websocket.id} - {svmem.percent}% was > {memory_use_limit_percent}%.. delaying connecting and waiting for more free RAM  ({time.time() - now:.1f}s)")
-        await asyncio.sleep(5)
-        if time.time() - now > 60:
-            logger.critical(
-                f"WebSocket ID: {websocket.id} - Too long waiting for memory usage to drop, dropping connection. {svmem.percent}% was > {memory_use_limit_percent}%  ({time.time() - now:.1f}s)")
-            await close_socket(websocket)
-            return
+    if DROP_EXCESS_CONNECTIONS:
+        while svmem.percent > memory_use_limit_percent:
+            logger.warning(f"WebSocket ID: {websocket.id} - {svmem.percent}% was > {memory_use_limit_percent}%.. delaying connecting and waiting for more free RAM  ({time.time() - now:.1f}s)")
+            await asyncio.sleep(5)
+            if time.time() - now > 60:
+                logger.critical(
+                    f"WebSocket ID: {websocket.id} - Too long waiting for memory usage to drop, dropping connection. {svmem.percent}% was > {memory_use_limit_percent}%  ({time.time() - now:.1f}s)")
+                await close_socket(websocket)
+                return
 
-    while connection_count > connection_count_max:
-        await asyncio.sleep(3)
-        if time.time() - now > 120:
-            logger.critical(
-                f"WebSocket ID: {websocket.id} - Waiting for existing connection count to drop took too long! dropping connection. ({time.time() - now:.1f}s)")
-            await close_socket(websocket)
-            return
+    # Connections that joined but had to wait a long time before being processed
+    if DROP_EXCESS_CONNECTIONS:
+        while connection_count > connection_count_max:
+            await asyncio.sleep(3)
+            if time.time() - now > 120:
+                logger.critical(
+                    f"WebSocket ID: {websocket.id} - Waiting for existing connection count to drop took too long! dropping connection. ({time.time() - now:.1f}s)")
+                await close_socket(websocket)
+                return
 
     now_before_chrome_launch = time.time()
 
