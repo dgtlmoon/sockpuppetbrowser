@@ -51,38 +51,40 @@ def launch_chrome(port=19222, user_data_dir="/tmp", url_query=""):
         chrome_location,
         "--allow-pre-commit-input",
         "--disable-background-networking",
-        "--enable-features=NetworkServiceInProcess2",
-        "--headless",
-#        "--hide-scrollbars",
-#        "--mute-audio",
-        f"--remote-debugging-port={port}",
         "--disable-background-timer-throttling",
         "--disable-backgrounding-occluded-windows",
+        "--disable-blink-features=AutomationControlled",
         "--disable-breakpad",
         "--disable-client-side-phishing-detection",
-        "--disable-component-extensions-with-background-pages",
         "--disable-component-update",
-        "--disable-default-apps",
         "--disable-dev-shm-usage",
-        "--disable-extensions",
-        "--disable-features=Translate,AcceptCHFrame,MediaRouter,OptimizationHints,ProcessPerSiteUpToMainFrameThreshold",
-        "--disable-field-trial-config",
+        "--disable-features=Translate,AcceptCHFrame,MediaRouter,OptimizationHints,Prerender2",
+        "--disable-gpu",
         "--disable-hang-monitor",
-        "--disable-infobars",
         "--disable-ipc-flooding-protection",
         "--disable-popup-blocking",
         "--disable-prompt-on-repost",
+        "--disable-remote-fonts",
         "--disable-renderer-backgrounding",
         "--disable-search-engine-choice-screen",
         "--disable-sync",
+        "--disable-web-security=true",
         "--enable-automation",
+        "--enable-blink-features=IdleDetection",
+        "--enable-features=NetworkServiceInProcess2",
+        "--enable-logging",
         "--export-tagged-pdf",
         "--force-color-profile=srgb",
-        "--generate-pdf-document-outline",
+        "--headless",
+        "--hide-scrollbars",
         "--metrics-recording-only",
+        "--mute-audio",
         "--no-first-run",
+        "--no-sandbox",
         "--password-store=basic",
         "--use-mock-keychain",
+        "--v1=1",
+        f"--remote-debugging-port={port}"
     ]
 
     chrome_run += args
@@ -125,6 +127,19 @@ def get_next_open_port(start=10000, end=60000):
 
     return r
 
+async def close_socket(websocket: websockets.WebSocketServerProtocol = None):
+    logger.critical(f"Attempting to close socket")
+
+    try:
+        await websocket.close()
+
+    except Exception as e:
+        # Handle other exceptions
+        logger.error(f"WebSocket ID: {websocket.id} - While closing - error: {e}")
+    finally:
+        # Any cleanup or additional actions you want to perform
+        pass
+
 async def stats_disconnect(time_at_start=0.0, websocket: websockets.WebSocketServerProtocol = None):
     global connection_count
     connection_count -= 1
@@ -152,7 +167,7 @@ async def cleanup_chrome_by_pid(p, user_data_dir="/tmp", time_at_start=0.0, webs
     else:
         logger.error(f"Websocket {websocket.id} - Looks like {p.pid} didnt die, sending SIGKILL.")
         os.kill(int(p.pid), signal.SIGKILL)
-
+    await close_socket(websocket)
     # @todo context for cleaning up datadir? some auto-cleanup flag?
     # shutil.rmtree(user_data_dir)
 
@@ -201,6 +216,7 @@ async def launchPlaywrightChromeProxy(websocket, path):
         if time.time() - now > 60:
             logger.critical(
                 f"WebSocket ID: {websocket.id} - Too long waiting for memory usage to drop, dropping connection. {svmem.percent}% was > {memory_use_limit_percent}%  ({time.time() - now:.1f}s)")
+            await close_socket(websocket)
             return
 
     while connection_count > connection_count_max:
@@ -208,6 +224,7 @@ async def launchPlaywrightChromeProxy(websocket, path):
         if time.time() - now > 120:
             logger.critical(
                 f"WebSocket ID: {websocket.id} - Waiting for existing connection count to drop took too long! dropping connection. ({time.time() - now:.1f}s)")
+            await close_socket(websocket)
             return
 
     now_before_chrome_launch = time.time()
@@ -226,16 +243,16 @@ async def launchPlaywrightChromeProxy(websocket, path):
         response = await _request_retry(chrome_json_info_url)
         if not response.status_code == 200:
             logger.critical(f"Chrome did not report the correct list of interfaces to at {chrome_json_info_url}, aborting :(")
-            # @todo return 500 with text
+            await close_socket(websocket)
             return
     except requests.exceptions.ConnectionError as e:
         # Instead of trying to analyse the output in a non-blocking way, we can assume that if we cant connect that something went wrong.
-        logger.critical(f"Uhoh! Looks like Chrome did not start! do you need --cap-add=SYS_ADMIN added to start this container?")
-        logger.critical(f"While trying to connect to {chrome_json_info_url} - {str(e)}")
-        process_output = chrome_process.communicate()
-        logger.critical(f"STDOUT '{process_output[0]}'")
-        logger.critical(f"STDERR '{process_output[1]}'")
-        chrome_process.terminate()
+        logger.critical(f"Uhoh! Looks like Chrome did not start! do you need --cap-add=SYS_ADMIN added to start this container? permissions are OK?")
+        logger.critical(f"While trying to connect to {chrome_json_info_url} - {str(e)}, Closing attempted chrome process")
+        # @todo maybe there is a non-blocking way to dump the STDERR/STDOUT ? otherwise .communicate() gets stuck here
+        chrome_process.kill()
+        await close_socket(websocket)
+
         return
 
     # On exception, flush and print debug
