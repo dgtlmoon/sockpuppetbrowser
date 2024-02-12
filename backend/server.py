@@ -73,7 +73,7 @@ def launch_chrome(port=19222, user_data_dir="/tmp", url_query=""):
         "--disable-search-engine-choice-screen",
         "--disable-sync",
         "--disable-web-security=true",
-        "--enable-automation",
+#        "--enable-automation", # Leave out off the notification that the browser is driven by automation
         "--enable-blink-features=IdleDetection",
         "--enable-features=NetworkServiceInProcess2",
         "--enable-logging",
