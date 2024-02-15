@@ -132,7 +132,7 @@ def get_next_open_port(start=10000, end=60000):
     return r
 
 async def close_socket(websocket: websockets.WebSocketServerProtocol = None):
-    logger.critical(f"Attempting to close socket")
+    logger.critical(f"Attempting to WebSocket ID {websocket.id}")
 
     try:
         await websocket.close()
@@ -192,7 +192,7 @@ async def _request_retry(url, num_retries=20, success_list=[200, 404], **kwargs)
     raise requests.exceptions.ConnectionError
 
 
-async def launchPlaywrightChromeProxy(websocket, path):
+async def launchPuppeteerChromeProxy(websocket, path):
     '''Called whenever a new connection is made to the server, Incoming connection, connect to CDP and start proxying'''
     global connection_count
     global connection_count_max
@@ -273,7 +273,7 @@ async def launchPlaywrightChromeProxy(websocket, path):
     try:
         async with websockets.connect(chrome_websocket_url, max_size=1024 * 1024 * 10) as ws:
             taskA = asyncio.create_task(hereToChromeCDP(ws, websocket))
-            taskB = asyncio.create_task(chromeCDPtoPlaywright(ws, websocket))
+            taskB = asyncio.create_task(puppeteerToHere(ws, websocket))
             await taskA
             await taskB
     except TimeoutError as e:
@@ -285,28 +285,28 @@ async def launchPlaywrightChromeProxy(websocket, path):
     logger.success(f"Websocket {websocket.id} - Connection done!")
 
 
-async def hereToChromeCDP(ws, websocket):
+async def hereToChromeCDP(puppeteer_ws, chrome_websocket):
     try:
-        async for message in ws:
+        async for message in puppeteer_ws:
             logger.trace(message[:1000])
-            await websocket.send(message)
+            await chrome_websocket.send(message)
     except Exception as e:
         logger.error(e)
 
 
-async def chromeCDPtoPlaywright(ws, websocket):
+async def puppeteerToHere(puppeteer_ws, chrome_websocket):
     try:
-        async for message in websocket:
+        async for message in chrome_websocket:
             logger.trace(message[:1000])
             if message.startswith("{") and message.endswith("}") and 'Page.navigate' in message:
                 try:
                     m = json.loads(message)
                     # Print out some debug so we know roughly whats going on
-                    logger.debug(f"{websocket.id} Page.navigate called to '{m['params']['url']}'")
+                    logger.debug(f"{chrome_websocket.id} Page.navigate request called to '{m['params']['url']}'")
                 except Exception as e:
                     pass
 
-            await ws.send(message)
+            await puppeteer_ws.send(message)
     except Exception as e:
         logger.error(e)
 
@@ -353,7 +353,7 @@ if __name__ == '__main__':
 
     args = parser.parse_args()
 
-    start_server = websockets.serve(launchPlaywrightChromeProxy, args.host, args.port)
+    start_server = websockets.serve(launchPuppeteerChromeProxy, args.host, args.port)
     poll = asyncio.get_event_loop().create_task(stats_thread_func())
     asyncio.get_event_loop().run_until_complete(start_server)
 
