@@ -70,7 +70,8 @@ def launch_chrome(port=19222, user_data_dir="/tmp", url_query=""):
         "--disable-client-side-phishing-detection",
         "--disable-component-update",
         "--disable-dev-shm-usage",
-        "--disable-features=Translate,AcceptCHFrame,MediaRouter,OptimizationHints,Prerender2",
+        # UserAgentClientHint - Say no to https://www.chromium.org/updates/ua-ch/ and force sites to rely on HTTP_USER_AGENT
+        "--disable-features=Translate,AcceptCHFrame,MediaRouter,OptimizationHints,Prerender2,UserAgentClientHint",
         "--disable-gpu",
         "--disable-hang-monitor",
         "--disable-ipc-flooding-protection",
