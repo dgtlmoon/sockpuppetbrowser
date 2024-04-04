@@ -3,7 +3,7 @@ from distutils.util import strtobool
 
 # Auto scaling websocket proxy for Chrome CDP
 
-
+from distutils.util import strtobool
 from loguru import logger
 import argparse
 import asyncio
@@ -35,13 +35,21 @@ DROP_EXCESS_CONNECTIONS = strtobool(os.getenv('DROP_EXCESS_CONNECTIONS', 'False'
 # @todo manage a hard 'MAX_CHROME_RUN_TIME` default 60sec
 # @todo use chrome remote debug by unix pipe, instead of socket
 
-def getBrowserArgsFromQuery(query):
-    extra_args = []
+def getBrowserArgsFromQuery(query, dashdash=True):
+    if dashdash:
+        extra_args = []
+    else:
+        extra_args = {}
     from urllib.parse import urlparse, parse_qs
     parsed_url = urlparse(query)
     for k, v in parse_qs(parsed_url.query).items():
-        if k.startswith('--'):
-            extra_args.append(f"{k}={v[0]}")
+        if dashdash:
+            if k.startswith('--'):
+                extra_args.append(f"{k}={v[0]}")
+        else:
+            if not k.startswith('--'):
+                extra_args[k] = v[0]
+
     return extra_args
 
 
@@ -192,6 +200,10 @@ async def _request_retry(url, num_retries=20, success_list=[200, 404], **kwargs)
     raise requests.exceptions.ConnectionError
 
 
+def debug_log_line(logfile_path, text):
+    with open(logfile_path, 'a') as f:
+        f.write(f"{time.time()} - {text}\n")
+
 async def launchPuppeteerChromeProxy(websocket, path):
     '''Called whenever a new connection is made to the server, Incoming connection, connect to CDP and start proxying'''
     global connection_count
@@ -269,34 +281,51 @@ async def launchPuppeteerChromeProxy(websocket, path):
     chrome_websocket_url = response.json().get("webSocketDebuggerUrl")
     logger.debug(f"WebSocket ID: {websocket.id} proxying to local Chrome instance via CDP {chrome_websocket_url}")
 
+    args = getBrowserArgsFromQuery(path, dashdash=False)
+    debug_log = args.get('log-cdp') if args.get('log-cdp') and strtobool(os.getenv('ALLOW_CDP_LOG', 'False')) else None
+
+    if debug_log and os.path.isfile(debug_log):
+        os.unlink(debug_log)
+
+
     # 10mb, keep in mind theres screenshots.
     try:
+        debug_log_line(text=f"Attempting connection to {chrome_websocket_url}", logfile_path=debug_log)
         async with websockets.connect(chrome_websocket_url, max_size=1024 * 1024 * 10) as ws:
-            taskA = asyncio.create_task(hereToChromeCDP(ws, websocket))
-            taskB = asyncio.create_task(puppeteerToHere(ws, websocket))
+            debug_log_line(text=f"Connected to {chrome_websocket_url}", logfile_path=debug_log)
+            taskA = asyncio.create_task(hereToChromeCDP(puppeteer_ws=ws, chrome_websocket=websocket, debug_log=debug_log))
+            taskB = asyncio.create_task(puppeteerToHere(puppeteer_ws=ws, chrome_websocket=websocket, debug_log=debug_log))
             await taskA
             await taskB
     except TimeoutError as e:
-        logger.error(f"Connection Timeout Out when connecting to Chrome CDP at {chrome_websocket_url}")
+        err=f"Connection Timeout Out when connecting to Chrome CDP at {chrome_websocket_url}"
+        logger.error(err)
+        debug_log_line(text=err, logfile_path=debug_log)
     except Exception as e:
         logger.error(f"Something bad happened: when connecting to Chrome CDP at {chrome_websocket_url}")
         logger.error(e)
+        debug_log_line(text="Exception:" + str(e), logfile_path=debug_log)
 
     logger.success(f"Websocket {websocket.id} - Connection done!")
+    debug_log_line(text=f"Websocket {websocket.id} - Connection done!", logfile_path=debug_log)
 
-
-async def hereToChromeCDP(puppeteer_ws, chrome_websocket):
+async def hereToChromeCDP(puppeteer_ws, chrome_websocket, debug_log=None):
     try:
         async for message in puppeteer_ws:
+            if debug_log:
+                debug_log_line(text=f"Chrome -> Puppeteer: {message[:1000]}", logfile_path=debug_log)
             logger.trace(message[:1000])
             await chrome_websocket.send(message)
     except Exception as e:
         logger.error(e)
 
 
-async def puppeteerToHere(puppeteer_ws, chrome_websocket):
+async def puppeteerToHere(puppeteer_ws, chrome_websocket, debug_log=None):
     try:
         async for message in chrome_websocket:
+            if debug_log:
+                debug_log_line(text=f"Puppeteer -> Chrome: {message[:1000]}", logfile_path=debug_log)
+
             logger.trace(message[:1000])
             if message.startswith("{") and message.endswith("}") and 'Page.navigate' in message:
                 try:

@@ -47,6 +47,21 @@ docker run --rm --security-opt seccomp=$(pwd)/chrome.json -p 127.0.0.1:3000:3000
 
 `seccomp` security setting is _highly_ recommended https://github.com/Zenika/alpine-chrome?tab=readme-ov-file#-the-best-with-seccomp
 
+### Debug CDP session logs
+
+Sometimes you need to examine the low-level Chrome CDP protocol interaction, enable `ALLOW_CDP_LOG=yes` environment 
+variable and add `&log-cdp=/path/somefile.txt` to the connection URL.
+
+Then the log will contain the CDP session, for example:
+
+```
+1712224824.5491815 - Attempting connection to ws://localhost:56745/devtools/browser/899f78ce-e7c8-4ad1-b8c9-a7aa449a93ef
+1712224824.5528538 - Connected to ws://localhost:56745/devtools/browser/899f78ce-e7c8-4ad1-b8c9-a7aa449a93ef
+1712224824.5529754 - Puppeteer -> Chrome: {"method": "Target.getBrowserContexts", "params": {}, "id": 1}
+1712224824.553542 - Chrome -> Puppeteer: {"id":1,"result":{"browserContextIds":[]}}
+...
+```
+
 ### Future ideas
 
 - Some super cool "on the wire" hacks to add custom functionality to CDP, like issuing single commands to download files (PDF) to location https://github.com/dgtlmoon/changedetection.io/issues/2019
