@@ -5,6 +5,7 @@ FROM zenika/alpine-chrome:119-with-playwright
 
 USER root
 ENV PYTHONUNBUFFERED=1
+ENV LOG_LEVEL=DEBUG
 RUN apk add --update --no-cache python3 python3-dev musl-dev linux-headers && ln -sf python3 /usr/bin/python
 RUN python3 -m ensurepip
 RUN pip3 install --upgrade pip
