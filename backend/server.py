@@ -291,7 +291,7 @@ async def launchPuppeteerChromeProxy(websocket, path):
     # 10mb, keep in mind theres screenshots.
     try:
         debug_log_line(text=f"Attempting connection to {chrome_websocket_url}", logfile_path=debug_log)
-        async with websockets.connect(chrome_websocket_url, max_size=1024 * 1024 * 10) as ws:
+        async with websockets.connect(chrome_websocket_url, max_size=None, max_queue=None) as ws:
             debug_log_line(text=f"Connected to {chrome_websocket_url}", logfile_path=debug_log)
             taskA = asyncio.create_task(hereToChromeCDP(puppeteer_ws=ws, chrome_websocket=websocket, debug_log=debug_log))
             taskB = asyncio.create_task(puppeteerToHere(puppeteer_ws=ws, chrome_websocket=websocket, debug_log=debug_log))
