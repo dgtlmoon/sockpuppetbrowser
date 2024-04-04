@@ -202,6 +202,8 @@ async def _request_retry(url, num_retries=20, success_list=[200, 404], **kwargs)
 
 
 def debug_log_line(logfile_path, text):
+    if logfile_path is None:
+        return
     with open(logfile_path, 'a') as f:
         f.write(f"{time.time()} - {text}\n")
 
