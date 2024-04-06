@@ -125,12 +125,21 @@ def launch_chrome(port=19222, user_data_dir="/tmp", url_query=""):
         logger.critical(f"Chrome binary was not found at {chrome_location}, aborting!")
         raise e
 
+    time.sleep(1)
+    process_poll_status = process.poll()
+    # .poll() will return None if its running, if it exited it will return the exit level
+    if process_poll_status != None:
+        # Print stderr and stdout if the process is not running
+        stdout, stderr = process.communicate()
+        logger.critical(f"Chrome process did not launch cleanly code {process_poll_status} '{stderr}' '{stdout}'")
+
     # Check if the process crashed on startup, print some debug if it did
     return process
 
 
 def get_next_open_port(start=10000, end=60000):
     import psutil
+    # This is kind of bad I know :)
     used_ports = []
     for conn in psutil.net_connections(kind="inet4"):
         if conn.status == 'LISTEN' and conn.laddr.port >= start and conn.laddr.port <= end:
