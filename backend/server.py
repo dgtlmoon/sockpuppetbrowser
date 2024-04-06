@@ -141,14 +141,14 @@ def get_next_open_port(start=10000, end=60000):
     return r
 
 async def close_socket(websocket: websockets.WebSocketServerProtocol = None):
-    logger.critical(f"Attempting to WebSocket ID {websocket.id}")
+    logger.debug(f"WebSocket: {websocket.id} Closing websocket to puppeteer")
 
     try:
         await websocket.close()
 
     except Exception as e:
         # Handle other exceptions
-        logger.error(f"WebSocket ID: {websocket.id} - While closing - error: {e}")
+        logger.error(f"WebSocket: {websocket.id} - While closing - error: {e}")
     finally:
         # Any cleanup or additional actions you want to perform
         pass
@@ -160,27 +160,36 @@ async def stats_disconnect(time_at_start=0.0, websocket: websockets.WebSocketSer
     logger.debug(
         f"Websocket {websocket.id} - Connection ended, processed in {time.time() - time_at_start:.3f}s")
 
-async def cleanup_chrome_by_pid(p, user_data_dir="/tmp", time_at_start=0.0, websocket: websockets.WebSocketServerProtocol = None):
+async def cleanup_chrome_by_pid(chrome_process, user_data_dir="/tmp", time_at_start=0.0, websocket: websockets.WebSocketServerProtocol = None):
     import signal
 
-    logger.debug(
-        f"Websocket {websocket.id} - Cleaning up chrome pid: {p.pid}")
-    p.kill()
-    # Flush IO queue
-    p.communicate()
+    # Wait for the process to complete without blocking
+    return_code_poll_status = chrome_process.poll()
+    while return_code_poll_status is None:
+        logger.debug(f"WebSocket ID: {websocket.id} Chrome subprocess PID {chrome_process.pid} is still running attempting kill...")
+        chrome_process.kill()
+        # Flush IO queue
+        chrome_process.communicate()
 
-    # @todo while not dead try for 10 sec..,
-    # does the pid disappear when killed?
-    await asyncio.sleep(2)
+        await asyncio.sleep(2)
+        try:
+            os.kill(chrome_process.pid, 0)
+        except OSError:
+            logger.success(f"Websocket {websocket.id} - Chrome PID {chrome_process.pid} died cleanly, good.")
+        else:
+            logger.error(f"Websocket {websocket.id} - Looks like {chrome_process.pid} didnt die, sending SIGKILL.")
+            os.kill(int(chrome_process.pid), signal.SIGKILL)
+        return_code_poll_status = chrome_process.poll()
 
-    try:
-        os.kill(p.pid, 0)
-    except OSError:
-        logger.success(f"Websocket {websocket.id} - Chrome PID {p.pid} died cleanly, good.")
+    # Should be dead now or already dead, report the status if it was something like a crash (SIG 11 etc)
+    if return_code_poll_status not in [-9, 9, -0]:
+        # Process exited with non-zero status
+        logger.error(f"WebSocket ID: {websocket.id} Chrome subprocess PID {chrome_process.pid} exited with non-zero status: {return_code_poll_status}")
     else:
-        logger.error(f"Websocket {websocket.id} - Looks like {p.pid} didnt die, sending SIGKILL.")
-        os.kill(int(p.pid), signal.SIGKILL)
+        logger.success(f"WebSocket ID: {websocket.id} Chrome subprocess PID {chrome_process.pid} exited successfully ({return_code_poll_status}).")
+
     await close_socket(websocket)
+
     # @todo context for cleaning up datadir? some auto-cleanup flag?
     # shutil.rmtree(user_data_dir)
 
@@ -255,7 +264,7 @@ async def launchPuppeteerChromeProxy(websocket, path):
     chrome_process = launch_chrome(port=port, url_query=path)
 
     closed.add_done_callback(lambda task: asyncio.ensure_future(
-        cleanup_chrome_by_pid(p=chrome_process, user_data_dir='@todo', time_at_start=now, websocket=websocket))
+        cleanup_chrome_by_pid(chrome_process=chrome_process, user_data_dir='@todo', time_at_start=now, websocket=websocket))
                              )
 
     chrome_json_info_url = f"http://localhost:{port}/json/version"
