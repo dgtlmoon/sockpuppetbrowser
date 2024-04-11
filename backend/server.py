@@ -70,8 +70,8 @@ def launch_chrome(port=19222, user_data_dir="/tmp", url_query=""):
         "--disable-client-side-phishing-detection",
         "--disable-component-update",
         "--disable-dev-shm-usage",
-        # UserAgentClientHint - Say no to https://www.chromium.org/updates/ua-ch/ and force sites to rely on HTTP_USER_AGENT
-        "--disable-features=Translate,AcceptCHFrame,MediaRouter,OptimizationHints,Prerender2,UserAgentClientHint",
+        # # UserAgentClientHint - Say no to https://www.chromium.org/updates/ua-ch/ and force sites to rely on HTTP_USER_AGENT
+        "--disable-features=AutofillServerCommunication,Translate,AcceptCHFrame,MediaRouter,OptimizationHints,Prerender2,UserAgentClientHint",
         "--disable-gpu",
         "--disable-hang-monitor",
         "--disable-ipc-flooding-protection",
@@ -82,14 +82,15 @@ def launch_chrome(port=19222, user_data_dir="/tmp", url_query=""):
         "--disable-search-engine-choice-screen",
         "--disable-sync",
         "--disable-web-security=true",
-#        "--enable-automation", # Leave out off the notification that the browser is driven by automation
+        #        "--enable-automation", # Leave out off the notification that the browser is driven by automation
         "--enable-blink-features=IdleDetection",
         "--enable-features=NetworkServiceInProcess2",
-        "--enable-logging",
+        "--enable-logging=stderr",
         "--export-tagged-pdf",
         "--force-color-profile=srgb",
         "--headless",
         "--hide-scrollbars",
+        "--log-level=2",
         "--metrics-recording-only",
         "--mute-audio",
         "--no-first-run",
@@ -125,7 +126,6 @@ def launch_chrome(port=19222, user_data_dir="/tmp", url_query=""):
         logger.critical(f"Chrome binary was not found at {chrome_location}, aborting!")
         raise e
 
-    time.sleep(1)
     process_poll_status = process.poll()
     # .poll() will return None if its running, if it exited it will return the exit level
     if process_poll_status != None:
@@ -287,10 +287,12 @@ async def launchPuppeteerChromeProxy(websocket, path):
             return
     except requests.exceptions.ConnectionError as e:
         # Instead of trying to analyse the output in a non-blocking way, we can assume that if we cant connect that something went wrong.
-        logger.critical(f"Uhoh! Looks like Chrome did not start! do you need --cap-add=SYS_ADMIN added to start this container? permissions are OK?")
-        logger.critical(f"While trying to connect to {chrome_json_info_url} - {str(e)}, Closing attempted chrome process")
+        logger.critical(f"WebSocket ID: {websocket.id} -Uhoh! Looks like Chrome did not start! do you need --cap-add=SYS_ADMIN added to start this container? permissions are OK? Disk is full?")
+        logger.critical(f"WebSocket ID: {websocket.id} -While trying to connect to {chrome_json_info_url} - {str(e)}, Closing attempted chrome process")
         # @todo maybe there is a non-blocking way to dump the STDERR/STDOUT ? otherwise .communicate() gets stuck here
         chrome_process.kill()
+        stdout, stderr = chrome_process.communicate()
+        logger.critical(f"WebSocket ID: {websocket.id} - Chrome debug output STDERR: {stderr} STDOUT: {stdout}")
         await close_socket(websocket)
 
         return
@@ -318,14 +320,15 @@ async def launchPuppeteerChromeProxy(websocket, path):
             taskB = asyncio.create_task(puppeteerToHere(puppeteer_ws=ws, chrome_websocket=websocket, debug_log=debug_log))
             await taskA
             await taskB
-    except TimeoutError as e:
-        err=f"Connection Timeout Out when connecting to Chrome CDP at {chrome_websocket_url}"
-        logger.error(err)
-        debug_log_line(text=err, logfile_path=debug_log)
     except Exception as e:
-        logger.error(f"Something bad happened: when connecting to Chrome CDP at {chrome_websocket_url}")
-        logger.error(e)
-        debug_log_line(text="Exception:" + str(e), logfile_path=debug_log)
+        stdout, stderr = chrome_process.communicate()
+        logger.critical(f"WebSocket ID: {websocket.id} - Chrome debug output STDERR: {stderr} STDOUT: {stdout}")
+        txt = f"Something bad happened when connecting to Chrome CDP at {chrome_websocket_url} (After getting good Chrome CDP URL from {chrome_json_info_url}) - '{str(e)}'"
+        logger.error(f"WebSocket ID: {websocket.id} - "+txt)
+        debug_log_line(text="Exception: " + txt, logfile_path=debug_log)
+        chrome_process.kill()
+
+
 
     logger.success(f"Websocket {websocket.id} - Connection done!")
     debug_log_line(text=f"Websocket {websocket.id} - Connection done!", logfile_path=debug_log)
