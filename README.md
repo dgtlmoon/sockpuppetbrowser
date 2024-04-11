@@ -6,6 +6,9 @@
 This is a docker image that simply creates a Chrome browser on demand and exposes that Chrome's CDP protocol 
 (which is what Puppeteer and other systems want to connect to) - to the outside world via a websocket.
 
+
+This project is the OpenSource'ed browser back-end for the amazing [opensource web page change detection](https://changedetection.io/) project.
+
 When a request for a new Chrome CDP starts, this software will launch an individual isolated-ish Chrome process
 for just that request (This is a Chrome CDP "Proxy")
 
@@ -28,8 +31,6 @@ commands to drive the actual project. So you need this project.
 
 (Playwright gives a high-level command set, which talks to `node`, that `node` then does the low-level CDP
 commands to drive Chrome directly)
-
-This project is the OpenSourced browser back-end for the amazing [opensource web page change detection](https://changedetection.io/) project.
 
 It is also more efficient to not need that extra `node` process like with some other systems 
 (you would end up with two node processes).
