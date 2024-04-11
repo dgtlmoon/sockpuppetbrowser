@@ -29,6 +29,8 @@ commands to drive the actual project. So you need this project.
 (Playwright gives a high-level command set, which talks to `node`, that `node` then does the low-level CDP
 commands to drive Chrome directly)
 
+This project is the OpenSourced browser back-end for the amazing [opensource web page change detection](https://changedetection.io/) project.
+
 It is also more efficient to not need that extra `node` process like with some other systems 
 (you would end up with two node processes).
 
