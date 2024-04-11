@@ -21,7 +21,7 @@ USER chrome
 
 
 COPY requirements.txt /usr/src/app/requirements.txt
-COPY backend/server.py /usr/src/app/server.py
+COPY backend/* /usr/src/app/
 
 WORKDIR /usr/src/app
 
