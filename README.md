@@ -47,6 +47,10 @@ docker run --rm --security-opt seccomp=$(pwd)/chrome.json -p 127.0.0.1:3000:3000
 
 `seccomp` security setting is _highly_ recommended https://github.com/Zenika/alpine-chrome?tab=readme-ov-file#-the-best-with-seccomp
 
+### Statistics
+
+Access `http://127.0.0.1:8080/stats` or which ever hostname you bind to, use `--sport` to specify something other than `8080`
+
 ### Debug CDP session logs
 
 Sometimes you need to examine the low-level Chrome CDP protocol interaction, enable `ALLOW_CDP_LOG=yes` environment 

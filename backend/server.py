@@ -4,6 +4,7 @@ from distutils.util import strtobool
 # Auto scaling websocket proxy for Chrome CDP
 
 from distutils.util import strtobool
+from http_server import start_http_server
 from loguru import logger
 import argparse
 import asyncio
@@ -18,9 +19,9 @@ import tempfile
 import time
 import websockets
 
-connection_count = 0
+stats = {'connection_count': 0, 'connection_count_total': 0, 'confirmed_data_received': 0}
 connection_count_max = int(os.getenv('MAX_CONCURRENT_CHROME_PROCESSES', 10))
-connection_count_total = 0
+
 shutdown = False
 memory_use_limit_percent = int(os.getenv('HARD_MEMORY_USAGE_LIMIT_PERCENT', 90))
 stats_refresh_time = int(os.getenv('STATS_REFRESH_SECONDS', 3))
@@ -163,8 +164,8 @@ async def close_socket(websocket: websockets.WebSocketServerProtocol = None):
         pass
 
 async def stats_disconnect(time_at_start=0.0, websocket: websockets.WebSocketServerProtocol = None):
-    global connection_count
-    connection_count -= 1
+    global stats
+    stats['connection_count'] -= 1
 
     logger.debug(
         f"Websocket {websocket.id} - Connection ended, processed in {time.time() - time_at_start:.3f}s")
@@ -227,9 +228,8 @@ def debug_log_line(logfile_path, text):
 
 async def launchPuppeteerChromeProxy(websocket, path):
     '''Called whenever a new connection is made to the server, Incoming connection, connect to CDP and start proxying'''
-    global connection_count
+    global stats
     global connection_count_max
-    global connection_count_total
 
     now = time.time()
     closed = asyncio.ensure_future(websocket.wait_closed())
@@ -240,12 +240,12 @@ async def launchPuppeteerChromeProxy(websocket, path):
     logger.debug(
         f"WebSocket ID: {websocket.id} Got new incoming connection ID from {websocket.remote_address[0]}:{websocket.remote_address[1]} ({path})")
 
-    connection_count += 1
-    connection_count_total += 1
+    stats['connection_count'] += 1
+    stats['connection_count_total'] += 1
 
-    if connection_count > connection_count_max:
+    if stats['connection_count'] > connection_count_max:
         logger.warning(
-            f"WebSocket ID: {websocket.id} - Throttling/waiting, max connection limit reached {connection_count} of max {connection_count_max}  ({time.time() - now:.1f}s)")
+            f"WebSocket ID: {websocket.id} - Throttling/waiting, max connection limit reached {stats['connection_count']} of max {connection_count_max}  ({time.time() - now:.1f}s)")
 
     if DROP_EXCESS_CONNECTIONS:
         while svmem.percent > memory_use_limit_percent:
@@ -365,14 +365,13 @@ async def puppeteerToHere(puppeteer_ws, chrome_websocket, debug_log=None):
 
 
 async def stats_thread_func():
-    global connection_count
     global connection_count_max
     global shutdown
 
     while True:
-        logger.info(f"Connections: Active count {connection_count} of max {connection_count_max}, Total processed: {connection_count_total}.")
-        if connection_count > connection_count_max:
-            logger.warning(f"{connection_count} of max {connection_count_max} over threshold, incoming connections will be delayed.")
+        logger.info(f"Connections: Active count {stats['connection_count']} of max {connection_count_max}, Total processed: {stats['connection_count_total']}.")
+        if stats['connection_count'] > connection_count_max:
+            logger.warning(f"{stats['connection_count']} of max {connection_count_max} over threshold, incoming connections will be delayed.")
 
         svmem = psutil.virtual_memory()
         logger.info(f"Memory: Used {svmem.percent}% (Limit {memory_use_limit_percent}%) - Available {svmem.free / 1024 / 1024:.1f}MB.")
@@ -402,13 +401,18 @@ if __name__ == '__main__':
     parser.add_argument('--host', help='Host to bind to.',
                         default='0.0.0.0')
     parser.add_argument('--port', help='Port to bind to.',
-                        default=3000)
+                        default=3000, type=int)
+    parser.add_argument('--sport', help='Port to bind to for http statistics /stats request.',
+                        default=8080, type=int)
 
     args = parser.parse_args()
 
     start_server = websockets.serve(launchPuppeteerChromeProxy, args.host, args.port)
+    http_server = start_http_server(host=args.host, port=args.sport, stats=stats)
+
+    asyncio.get_event_loop().run_until_complete(asyncio.gather(start_server, http_server))
+
     poll = asyncio.get_event_loop().create_task(stats_thread_func())
-    asyncio.get_event_loop().run_until_complete(start_server)
 
     try:
         chrome_path = os.getenv("CHROME_BIN", "/usr/bin/google-chrome")
