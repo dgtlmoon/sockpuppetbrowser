@@ -62,6 +62,13 @@ Then the log will contain the CDP session, for example:
 ...
 ```
 
+### Tuning
+
+Some tips on high-concurrency scraping and tuning where you have a lot of chrome browsers running simultaneously
+
+- Set your `inotify` values higher https://stackoverflow.com/questions/32281277/too-many-open-files-failed-to-initialize-inotify-the-user-limit-on-the-total
+
+
 ### Future ideas
 
 - Some super cool "on the wire" hacks to add custom functionality to CDP, like issuing single commands to download files (PDF) to location https://github.com/dgtlmoon/changedetection.io/issues/2019
