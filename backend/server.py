@@ -19,7 +19,7 @@ import tempfile
 import time
 import websockets
 
-stats = {'connection_count': 0, 'connection_count_total': 0, 'confirmed_data_received': 0}
+stats = {'connection_count': 0, 'connection_count_total': 0, 'confirmed_data_received': 0, 'special_counter':[]}
 connection_count_max = int(os.getenv('MAX_CONCURRENT_CHROME_PROCESSES', 10))
 
 shutdown = False
@@ -339,6 +339,11 @@ async def hereToChromeCDP(puppeteer_ws, chrome_websocket, debug_log=None):
             if debug_log:
                 debug_log_line(text=f"Chrome -> Puppeteer: {message[:1000]}", logfile_path=debug_log)
             logger.trace(message[:1000])
+
+            # If it has the special counter, record it, this is handy for recording that the browser session actually sent a shutdown/ "IM DONE" message
+            if 'SOCKPUPPET.specialcounter' in message[:200] and puppeteer_ws.id not in stats['special_counter']:
+                stats['special_counter'].append(puppeteer_ws.id)
+
             await chrome_websocket.send(message)
     except Exception as e:
         logger.error(e)
