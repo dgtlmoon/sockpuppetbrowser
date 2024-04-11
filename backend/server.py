@@ -192,8 +192,9 @@ async def cleanup_chrome_by_pid(chrome_process, user_data_dir="/tmp", time_at_st
     # shutil.rmtree(user_data_dir)
 
 async def _request_retry(url, num_retries=20, success_list=[200, 404], **kwargs):
-    # On a healthy machine with no load, Chrome is usually fired up in 100ms
+    # On a healthy machine with no load, Chrome is usually fired up in 100ms    
     for _ in range(num_retries):
+        # Actually this sleep turns out to be HUGELY important for the stability of the Chrome CDP interface under high loads
         await asyncio.sleep(1)
 
         try:
