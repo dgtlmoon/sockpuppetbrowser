@@ -93,6 +93,7 @@ Then the log will contain the CDP session, for example:
 Some tips on high-concurrency scraping and tuning where you have a lot of chrome browsers running simultaneously
 
 - Set your `inotify` values higher https://stackoverflow.com/questions/32281277/too-many-open-files-failed-to-initialize-inotify-the-user-limit-on-the-total
+- Don't burn out your disk!! Mount the path for `--user-data-dir` as a RAM Disk/tmpfs disk ! This will also help to speed up Chrome
 
 On a `Intel(R) Xeon(R) E-2288G CPU @ 3.70GHz` (16 core), it will sustain 150 concurrent browser sessions with a load average of about 65-70 (about 3-4 browsers per CPU core it means).
 
