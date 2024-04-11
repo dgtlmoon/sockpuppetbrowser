@@ -23,7 +23,7 @@ connection_count_max = int(os.getenv('MAX_CONCURRENT_CHROME_PROCESSES', 10))
 connection_count_total = 0
 shutdown = False
 memory_use_limit_percent = int(os.getenv('HARD_MEMORY_USAGE_LIMIT_PERCENT', 90))
-stats_refresh_time = int(os.getenv('STATS_REFRESH_SECONDS', 10))
+stats_refresh_time = int(os.getenv('STATS_REFRESH_SECONDS', 3))
 
 # When we are over memory limit or hit connection_count_max
 DROP_EXCESS_CONNECTIONS = strtobool(os.getenv('DROP_EXCESS_CONNECTIONS', 'False'))
