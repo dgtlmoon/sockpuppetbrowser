@@ -6,6 +6,9 @@
 This is a docker image that simply creates a Chrome browser on demand and exposes that Chrome's CDP protocol 
 (which is what Puppeteer and other systems want to connect to) - to the outside world via a websocket.
 
+When a request for a new Chrome CDP starts, this software will launch an individual isolated-ish Chrome process
+for just that request (This is a Chrome CDP "Proxy")
+
 It is based on the excellent https://github.com/Zenika/alpine-chrome, and we add our own wrapper to launch
 individual chrome instances on demand.
 
