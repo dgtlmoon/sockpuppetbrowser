@@ -5,13 +5,13 @@ from distutils.util import strtobool
 
 from distutils.util import strtobool
 from http_server import start_http_server
+from ports import PortSelector
 from loguru import logger
 import argparse
 import asyncio
 import json
 import os
 import psutil
-import random
 import requests
 import subprocess
 import sys
@@ -21,7 +21,7 @@ import websockets
 
 stats = {'connection_count': 0, 'connection_count_total': 0, 'confirmed_data_received': 0, 'special_counter':[]}
 connection_count_max = int(os.getenv('MAX_CONCURRENT_CHROME_PROCESSES', 10))
-
+port_selector = PortSelector()
 shutdown = False
 memory_use_limit_percent = int(os.getenv('HARD_MEMORY_USAGE_LIMIT_PERCENT', 90))
 stats_refresh_time = int(os.getenv('STATS_REFRESH_SECONDS', 3))
@@ -138,18 +138,6 @@ def launch_chrome(port=19222, user_data_dir="/tmp", url_query=""):
     return process
 
 
-def get_next_open_port(start=10000, end=60000):
-    import psutil
-    # This is kind of bad I know :)
-    used_ports = []
-    for conn in psutil.net_connections(kind="inet4"):
-        if conn.status == 'LISTEN' and conn.laddr.port >= start and conn.laddr.port <= end:
-            used_ports.append(conn.laddr.port)
-
-    r = next(rng for rng in iter(lambda: random.randint(start, end), None) if rng not in used_ports)
-
-    return r
-
 async def close_socket(websocket: websockets.WebSocketServerProtocol = None):
     logger.debug(f"WebSocket: {websocket.id} Closing websocket to puppeteer")
 
@@ -205,8 +193,9 @@ async def cleanup_chrome_by_pid(chrome_process, user_data_dir="/tmp", time_at_st
 
 async def _request_retry(url, num_retries=20, success_list=[200, 404], **kwargs):
     # On a healthy machine with no load, Chrome is usually fired up in 100ms
-    await asyncio.sleep(0.1)
     for _ in range(num_retries):
+        await asyncio.sleep(1)
+
         try:
             response = requests.get(url, **kwargs)
             if response.status_code in success_list:
@@ -214,7 +203,6 @@ async def _request_retry(url, num_retries=20, success_list=[200, 404], **kwargs)
                 return response
         except requests.exceptions.ConnectionError:
             logger.warning("No response from Chrome, retrying..")
-            await asyncio.sleep(0.2)
             pass
 
     raise requests.exceptions.ConnectionError
@@ -269,7 +257,7 @@ async def launchPuppeteerChromeProxy(websocket, path):
 
     now_before_chrome_launch = time.time()
 
-    port = get_next_open_port()
+    port = next(port_selector)
     chrome_process = launch_chrome(port=port, url_query=path)
 
     closed.add_done_callback(lambda task: asyncio.ensure_future(
