@@ -94,7 +94,9 @@ Some tips on high-concurrency scraping and tuning where you have a lot of chrome
 
 - Set your `inotify` values higher https://stackoverflow.com/questions/32281277/too-many-open-files-failed-to-initialize-inotify-the-user-limit-on-the-total
 
-On a `Intel(R) Xeon(R) E-2288G CPU @ 3.70GHz` (16 core), it will sustain 150 concurrent browser sessions with a load average of about 65-70 (about 3-4 browsers per CPU core it means)
+On a `Intel(R) Xeon(R) E-2288G CPU @ 3.70GHz` (16 core), it will sustain 150 concurrent browser sessions with a load average of about 65-70 (about 3-4 browsers per CPU core it means).
+
+Most of the CPU load seems to occur when starting a browser, maybe in the future 1 browser could processes multiple requests.
 
 ### Future ideas
 
