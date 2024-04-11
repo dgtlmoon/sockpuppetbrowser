@@ -54,6 +54,15 @@ docker run --rm --security-opt seccomp=$(pwd)/chrome.json -p 127.0.0.1:3000:3000
 
 Access `http://127.0.0.1:8080/stats` or which ever hostname you bind to, use `--sport` to specify something other than `8080`
 
+```
+{
+  "active_connections": 158,
+  "connection_count_total": 8383,
+  "mem_use_percent": 46.9,
+  "special_counter_len": 0
+}
+```
+
 You can also add this to your fetch and access `'special_counter_len'` at the `/stats` URL, this is good for adding at the end of your scripts so you know the actual script ran all steps.
 
 ```
