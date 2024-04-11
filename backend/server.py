@@ -259,7 +259,7 @@ async def launchPuppeteerChromeProxy(websocket, path):
 
     # Connections that joined but had to wait a long time before being processed
     if DROP_EXCESS_CONNECTIONS:
-        while connection_count > connection_count_max:
+        while stats['connection_count'] > connection_count_max:
             await asyncio.sleep(3)
             if time.time() - now > 120:
                 logger.critical(
