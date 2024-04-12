@@ -95,6 +95,7 @@ Then the log will contain the CDP session, for example:
 
 Some tips on high-concurrency scraping and tuning where you have a lot of chrome browsers running simultaneously
 
+- Understand different Chrome command line options https://github.com/GoogleChrome/chrome-launcher/blob/main/docs/chrome-flags-for-tools.md and specify them on the connection URL
 - Set your `inotify` values higher https://stackoverflow.com/questions/32281277/too-many-open-files-failed-to-initialize-inotify-the-user-limit-on-the-total
 - Don't burn out your disk!! Mount the path for `--user-data-dir` as a RAM Disk/tmpfs disk ! This will also help to speed up Chrome
 
