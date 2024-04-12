@@ -3,8 +3,9 @@
 
 ## What is this?
 
-This is a docker image that simply creates a Chrome browser on demand and exposes that Chrome's CDP protocol 
-(which is what Puppeteer and other systems want to connect to) - to the outside world via a websocket.
+This is a high-performance proxy for Chrome so that you can drive many simultaneous Chrome browsers easily and efficiently.
+
+When you connect on `ws://127.0.0.1:3000` as your "CDP Chrome Browser URL" URL it will always spin up a new fresh Chrome instance.
 
 
 This project is the OpenSource'ed browser back-end for the amazing [opensource web page change detection](https://changedetection.io/) project.
