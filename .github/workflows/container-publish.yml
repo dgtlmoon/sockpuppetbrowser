@@ -55,7 +55,7 @@ jobs:
           driver-opts: image=moby/buildkit:master
       - name: Build container for test
         id: docker_build
-        uses: docker/build-push-action@v5
+        uses: docker/build-push-action@v6
         with:
           context: ./
           file: ./Dockerfile
@@ -105,7 +105,7 @@ jobs:
       - name: Build and push :latest
         id: docker_build
         if: ${{ github.ref }} == "refs/heads/master"
-        uses: docker/build-push-action@v5
+        uses: docker/build-push-action@v6
         with:
           context: ./
           file: ./Dockerfile
