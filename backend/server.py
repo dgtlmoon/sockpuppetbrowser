@@ -113,11 +113,12 @@ def launch_chrome(port=19222, user_data_dir="/tmp", url_query=""):
             chrome_run.append(screen_wh_arg)
         else:
             logger.warning(f"No --window-size in query, and no SCREEN_HEIGHT + SCREEN_WIDTH env vars found :-(")
-
+    is_temp = False
     if not '--user-data-dir' in url_query:
         tmp_user_data_dir = tempfile.mkdtemp(prefix="chrome-puppeteer-proxy", dir="/tmp")
         chrome_run.append(f"--user-data-dir={tmp_user_data_dir}")
         logger.debug(f"No user-data-dir in query, using {tmp_user_data_dir}")
+        is_temp = True
     else:
         tmp_user_data_dir = user_data_dir
 
@@ -138,7 +139,7 @@ def launch_chrome(port=19222, user_data_dir="/tmp", url_query=""):
         logger.critical(f"Chrome process did not launch cleanly code {process_poll_status} '{stderr}' '{stdout}'")
 
     # Check if the process crashed on startup, print some debug if it did
-    return process, tmp_user_data_dir
+    return process, tmp_user_data_dir, is_temp
 
 
 async def close_socket(websocket: websockets.WebSocketServerProtocol = None):
@@ -161,7 +162,7 @@ async def stats_disconnect(time_at_start=0.0, websocket: websockets.WebSocketSer
     logger.debug(
         f"Websocket {websocket.id} - Connection ended, processed in {time.time() - time_at_start:.3f}s")
 
-async def cleanup_chrome_by_pid(chrome_process, user_data_dir="/tmp", time_at_start=0.0, websocket: websockets.WebSocketServerProtocol = None):
+async def cleanup_chrome_by_pid(chrome_process, user_data_dir="/tmp", time_at_start=0.0, websocket: websockets.WebSocketServerProtocol = None, is_temp=False):
     import signal
 
     # Wait for the process to complete without blocking
@@ -183,7 +184,11 @@ async def cleanup_chrome_by_pid(chrome_process, user_data_dir="/tmp", time_at_st
         return_code_poll_status = chrome_process.poll()
 
     # Should be dead now or already dead, report the status if it was something like a crash (SIG 11 etc)
-    shutil.rmtree(user_data_dir)
+    if is_temp:
+        try:
+            shutil.rmtree(user_data_dir)
+        except Exception:
+            pass
     if return_code_poll_status not in [-9, 9, -0]:
         # Process exited with non-zero status
         logger.error(f"WebSocket ID: {websocket.id} Chrome subprocess PID {chrome_process.pid} exited with non-zero status: {return_code_poll_status}")
@@ -263,10 +268,10 @@ async def launchPuppeteerChromeProxy(websocket, path):
     now_before_chrome_launch = time.time()
 
     port = next(port_selector)
-    chrome_process, user_data_dir = launch_chrome(port=port, url_query=path)
+    chrome_process, user_data_dir, is_temp = launch_chrome(port=port, url_query=path)
 
     closed.add_done_callback(lambda task: asyncio.ensure_future(
-        cleanup_chrome_by_pid(chrome_process=chrome_process, user_data_dir=user_data_dir, time_at_start=now, websocket=websocket))
+        cleanup_chrome_by_pid(chrome_process=chrome_process, user_data_dir=user_data_dir, time_at_start=now, websocket=websocket, is_temp=is_temp))
                              )
 
     chrome_json_info_url = f"http://localhost:{port}/json/version"
