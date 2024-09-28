@@ -19,7 +19,13 @@ import tempfile
 import time
 import websockets
 
-stats = {'connection_count': 0, 'connection_count_total': 0, 'confirmed_data_received': 0, 'special_counter':[]}
+stats = {'connection_count': 0,
+         'connection_count_total': 0,
+         'confirmed_data_received': 0,
+         'special_counter': [],
+         'dropped_waited_too_long': 0,
+         'dropped_threshold_reached': 0,
+         }
 connection_count_max = int(os.getenv('MAX_CONCURRENT_CHROME_PROCESSES', 10))
 port_selector = PortSelector()
 shutdown = False
@@ -225,12 +231,9 @@ async def launchPuppeteerChromeProxy(websocket, path):
     closed.add_done_callback(lambda task: asyncio.ensure_future(stats_disconnect(time_at_start=now, websocket=websocket)))
 
     svmem = psutil.virtual_memory()
-
+    stats['connection_count_total'] += 1
     logger.debug(
         f"WebSocket ID: {websocket.id} Got new incoming connection ID from {websocket.remote_address[0]}:{websocket.remote_address[1]} ({path})")
-
-    stats['connection_count'] += 1
-    stats['connection_count_total'] += 1
 
     if stats['connection_count'] > connection_count_max:
         logger.warning(
@@ -244,6 +247,7 @@ async def launchPuppeteerChromeProxy(websocket, path):
                 logger.critical(
                     f"WebSocket ID: {websocket.id} - Too long waiting for memory usage to drop, dropping connection. {svmem.percent}% was > {memory_use_limit_percent}%  ({time.time() - now:.1f}s)")
                 await close_socket(websocket)
+                stats['dropped_threshold_reached'] += 1
                 return
 
     # Connections that joined but had to wait a long time before being processed
@@ -254,7 +258,10 @@ async def launchPuppeteerChromeProxy(websocket, path):
                 logger.critical(
                     f"WebSocket ID: {websocket.id} - Waiting for existing connection count to drop took too long! dropping connection. ({time.time() - now:.1f}s)")
                 await close_socket(websocket)
+                stats['dropped_waited_too_long'] += 1
                 return
+
+    stats['connection_count'] += 1
 
     now_before_chrome_launch = time.time()
 
