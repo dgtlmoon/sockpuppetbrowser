@@ -7,6 +7,8 @@ async def handle_http_request(request, stats):
     data = {
         'active_connections': stats['connection_count'],
         'connection_count_total': stats['connection_count_total'],
+        'dropped_threshold_reached': stats['dropped_threshold_reached'],
+        'dropped_waited_too_long': stats['dropped_waited_too_long'],
         'mem_use_percent': svmem.percent,
         'special_counter_len': len(stats['special_counter'])
     }

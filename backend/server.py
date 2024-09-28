@@ -19,13 +19,15 @@ import tempfile
 import time
 import websockets
 
-stats = {'connection_count': 0,
-         'connection_count_total': 0,
-         'confirmed_data_received': 0,
-         'special_counter': [],
-         'dropped_waited_too_long': 0,
-         'dropped_threshold_reached': 0,
-         }
+stats = {
+    'confirmed_data_received': 0,
+    'connection_count': 0,
+    'connection_count_total': 0,
+    'dropped_threshold_reached': 0,
+    'dropped_waited_too_long': 0,
+    'special_counter': [],
+}
+
 connection_count_max = int(os.getenv('MAX_CONCURRENT_CHROME_PROCESSES', 10))
 port_selector = PortSelector()
 shutdown = False
