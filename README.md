@@ -104,8 +104,23 @@ On a `Intel(R) Xeon(R) E-2288G CPU @ 3.70GHz` (16 core), it will sustain 150 con
 
 Most of the CPU load seems to occur when starting a browser, maybe in the future 1 browser could processes multiple requests.
 
+### Docker healthcheck
+
+Add this to your `docker-compose.yml`, it will check port 3000 answers and that the `/stats` endpoint on port 8080 responds
+
+```
+    healthcheck:
+      test:
+        CMD-SHELL: python3 /usr/src/app/docker-health-check.py --host http://localhost
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+```
+
 ### Future ideas
 
 - Some super cool "on the wire" hacks to add custom functionality to CDP, like issuing single commands to download files (PDF) to location https://github.com/dgtlmoon/changedetection.io/issues/2019
+
 
 Have fun!
