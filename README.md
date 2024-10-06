@@ -110,11 +110,16 @@ Add this to your `docker-compose.yml`, it will check port 3000 answers and that 
 
 ```
     healthcheck:
-      test: CMD-SHELL python3 /usr/src/app/docker-health-check.py --host http://localhost
+      test: "python3 /usr/src/app/docker-health-check.py --host http://localhost"
       interval: 30s
       timeout: 5s
       retries: 3
       start_period: 10s
+```
+
+To review deeper docker container information about the containers health
+```
+docker inspect --format='{{json .State.Health}}' browser-sockpuppetbrowser-1
 ```
 
 ### Future ideas
