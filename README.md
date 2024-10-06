@@ -110,8 +110,7 @@ Add this to your `docker-compose.yml`, it will check port 3000 answers and that 
 
 ```
     healthcheck:
-      test:
-        CMD-SHELL: python3 /usr/src/app/docker-health-check.py --host http://localhost
+      test: CMD-SHELL python3 /usr/src/app/docker-health-check.py --host http://localhost
       interval: 30s
       timeout: 5s
       retries: 3
