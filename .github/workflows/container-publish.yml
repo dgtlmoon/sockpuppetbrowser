@@ -4,7 +4,9 @@ on:
   push:
     branches:
       - master
-
+  release:
+    types: [published, edited]
+    
 jobs:
 
   docker-build-setup:
