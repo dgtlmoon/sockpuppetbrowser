@@ -115,6 +115,21 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
+      # master branch -> :latest container tag
+      - name: Build and push :latest
+        id: docker_build
+        if: ${{ github.ref }} == "refs/heads/master"
+        uses: docker/build-push-action@v6
+        with:
+          context: ./
+          file: ./Dockerfile
+          push: true
+          tags: |
+            ${{ secrets.DOCKER_HUB_USERNAME }}/sockpuppetbrowser:latest
+          platforms: linux/amd64,linux/arm64
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
       - name: Image digest
         run: echo step SHA ${{ steps.vars.outputs.sha_short }} tag ${{steps.vars.outputs.tag}} branch ${{steps.vars.outputs.branch}} digest ${{ steps.docker_build.outputs.digest }}
 
