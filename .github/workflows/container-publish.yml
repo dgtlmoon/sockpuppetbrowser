@@ -101,18 +101,16 @@ jobs:
           username: ${{ secrets.DOCKER_HUB_USERNAME }}
           password: ${{ secrets.DOCKER_HUB_ACCESS_TOKEN }}
 
-      # master branch -> :latest container tag
-      - name: Build and push :latest
+      - name: Build and push release 0.x
         id: docker_build
-        if: ${{ github.ref }} == "refs/heads/master"
+        if: github.event_name == 'release' && startsWith(github.event.release.tag_name, '0.')
         uses: docker/build-push-action@v6
         with:
           context: ./
           file: ./Dockerfile
           push: true
-#            ${{ secrets.DOCKER_HUB_USERNAME }}/sockpuppetbrowser:latest,ghcr.io/${{ github.repository }}:latest
           tags: |
-            ${{ secrets.DOCKER_HUB_USERNAME }}/sockpuppetbrowser:latest
+            ${{ secrets.DOCKER_HUB_USERNAME }}/sockpuppetbrowser:${{ github.event.release.tag_name }}
           platforms: linux/amd64,linux/arm64
           cache-from: type=gha
           cache-to: type=gha,mode=max
