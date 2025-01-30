@@ -117,7 +117,7 @@ jobs:
 
       # master branch -> :latest container tag
       - name: Build and push :latest
-        id: docker_build
+        id: docker_build_latest
         if: ${{ github.ref }} == "refs/heads/master"
         uses: docker/build-push-action@v6
         with:
