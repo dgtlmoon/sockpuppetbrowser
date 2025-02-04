@@ -1,4 +1,5 @@
 FROM zenika/alpine-chrome:119-with-playwright
+LABEL org.opencontainers.image.source="https://github.com/dgtlmoon/sockpuppetbrowser"
 
 # docker build -t test .
 # docker run -it -v `pwd`:/tmp/server -i --init --cap-add=SYS_ADMIN test bash
