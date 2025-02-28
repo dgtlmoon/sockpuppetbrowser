@@ -33,6 +33,7 @@ port_selector = PortSelector()
 shutdown = False
 memory_use_limit_percent = int(os.getenv('HARD_MEMORY_USAGE_LIMIT_PERCENT', 90))
 stats_refresh_time = int(os.getenv('STATS_REFRESH_SECONDS', 3))
+STARTUP_DELAY = int(os.getenv('STARTUP_DELAY', 0))
 
 # When we are over memory limit or hit connection_count_max
 DROP_EXCESS_CONNECTIONS = strtobool(os.getenv('DROP_EXCESS_CONNECTIONS', 'False'))
@@ -386,6 +387,7 @@ if __name__ == '__main__':
     # Set a default logger level
     logger_level = os.getenv('LOG_LEVEL', 'DEBUG')
     logger.remove()
+
     try:
         log_level_for_stdout = {'DEBUG', 'SUCCESS'}
         logger.configure(handlers=[
@@ -409,6 +411,10 @@ if __name__ == '__main__':
                         default=8080, type=int)
 
     args = parser.parse_args()
+
+    if STARTUP_DELAY:
+        logger.info(f"Start-up delay {STARTUP_DELAY} seconds...")
+        time.sleep(STARTUP_DELAY)
 
     start_server = websockets.serve(launchPuppeteerChromeProxy, args.host, args.port)
     http_server = start_http_server(host=args.host, port=args.sport, stats=stats)
