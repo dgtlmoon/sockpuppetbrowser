@@ -26,6 +26,7 @@ stats = {
     'dropped_threshold_reached': 0,
     'dropped_waited_too_long': 0,
     'special_counter': [],
+    'chrome_start_failures': 0,
 }
 
 connection_count_max = int(os.getenv('MAX_CONCURRENT_CHROME_PROCESSES', 10))
@@ -138,12 +139,22 @@ async def launch_chrome(port=19222, user_data_dir="/tmp", url_query=""):
 
     # Run Popen in executor to prevent blocking with a 20-second timeout
     try:
+        # Always get a fresh event loop reference to ensure it's defined
+        loop = asyncio.get_event_loop()
+            
+        # Wrap subprocess.Popen in a lambda for the executor
+        def create_chrome_process():
+            return subprocess.Popen(
+                args=chrome_run, 
+                shell=False, 
+                stdout=subprocess.PIPE, 
+                stderr=subprocess.PIPE, 
+                bufsize=1, 
+                universal_newlines=True
+            )
+            
         process = await asyncio.wait_for(
-            loop.run_in_executor(
-                None,
-                lambda: subprocess.Popen(args=chrome_run, shell=False, stdout=subprocess.PIPE, 
-                                        stderr=subprocess.PIPE, bufsize=1, universal_newlines=True)
-            ),
+            loop.run_in_executor(None, create_chrome_process),
             timeout=20.0  # 20 second timeout as requested
         )
     except asyncio.TimeoutError:
@@ -152,9 +163,14 @@ async def launch_chrome(port=19222, user_data_dir="/tmp", url_query=""):
     except FileNotFoundError as e:
         logger.critical(f"Chrome binary was not found at {chrome_location}, aborting!")
         raise e
+    except Exception as e:
+        logger.critical(f"Unexpected error launching Chrome: {str(e)}")
+        raise RuntimeError(f"Chrome startup failed: {str(e)}")
 
     # Run poll in executor to prevent blocking
     try:
+        # Always get a fresh event loop reference to ensure it's defined
+        loop = asyncio.get_event_loop()
         process_poll_status = await asyncio.wait_for(
             loop.run_in_executor(None, process.poll),
             timeout=20.0
@@ -166,6 +182,8 @@ async def launch_chrome(port=19222, user_data_dir="/tmp", url_query=""):
     if process_poll_status is not None:
         # Process exited immediately, collect output
         try:
+            # Always get a fresh event loop reference to ensure it's defined
+            loop = asyncio.get_event_loop()
             stdout, stderr = await asyncio.wait_for(
                 loop.run_in_executor(None, process.communicate),
                 timeout=25.0
@@ -201,6 +219,7 @@ async def cleanup_chrome_by_pid(chrome_process, user_data_dir="/tmp", time_at_st
     import signal
     import psutil
     
+    # Always get a fresh event loop reference
     loop = asyncio.get_event_loop()
     MAX_CLEANUP_TIME = 15  # Max seconds to spend trying to clean up a Chrome process
     cleanup_start_time = time.time()
@@ -390,6 +409,7 @@ async def debug_log_line(logfile_path, text):
     
     try:
         # Run file I/O in executor to avoid blocking the event loop
+        # Always get a fresh event loop reference
         loop = asyncio.get_event_loop()
         await asyncio.wait_for(
             loop.run_in_executor(
@@ -470,9 +490,17 @@ async def launchPuppeteerChromeProxy(websocket, path):
 
     port = next(port_selector)
     try:
+        # Make sure to handle asyncio properly
         chrome_process = await launch_chrome(port=port, url_query=path)
     except (asyncio.TimeoutError, RuntimeError) as e:
         logger.critical(f"WebSocket ID: {websocket.id} - Chrome launch failed: {str(e)}")
+        stats['chrome_start_failures'] += 1
+        await close_socket(websocket)
+        stats['connection_count'] -= 1
+        return
+    except Exception as e:
+        logger.critical(f"WebSocket ID: {websocket.id} - Unexpected error during Chrome launch: {str(e)}")
+        stats['chrome_start_failures'] += 1
         await close_socket(websocket)
         stats['connection_count'] -= 1
         return
@@ -488,12 +516,15 @@ async def launchPuppeteerChromeProxy(websocket, path):
         response = await _request_retry(chrome_json_info_url, websocket_id=websocket.id)
         if not response.status_code == 200:
             logger.critical(f"WebSocket ID: {websocket.id} - Chrome did not report the correct list of interfaces at {chrome_json_info_url}, aborting :(")
+            stats['chrome_start_failures'] += 1
             await close_socket(websocket)
             return
     except requests.exceptions.ConnectionError as e:
         # Instead of trying to analyse the output in a non-blocking way, we can assume that if we cant connect that something went wrong.
         logger.critical(f"WebSocket ID: {websocket.id} -Uhoh! Looks like Chrome did not start! do you need --cap-add=SYS_ADMIN added to start this container? permissions are OK? Disk is full?")
         logger.critical(f"WebSocket ID: {websocket.id} -While trying to connect to {chrome_json_info_url} - {str(e)}, Closing attempted chrome process")
+        # Increment the chrome_start_failures counter
+        stats['chrome_start_failures'] += 1
         # @todo maybe there is a non-blocking way to dump the STDERR/STDOUT ? otherwise .communicate() gets stuck here
         chrome_process.kill()
         stdout, stderr = chrome_process.communicate()
