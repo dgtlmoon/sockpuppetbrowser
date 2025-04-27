@@ -1,0 +1,19 @@
+version: "3"
+services:
+  app:
+    build: .
+    cap_add:
+      - SYS_ADMIN
+    ports:
+#      - 192.168.0.1:3000:3000 # ws://...:3000 browser endpoint
+#      - 192.168.0.1:8080:8080 # Stats info
+      # WARNING! DO NOT USE OPEN PORTS BELOW! ALWAYS BIND TO A LOCAL IP ADDRESS
+      - 3000:3000 # ws://...:3000 browser endpoint
+      - 8080:8080 # Stats info
+    security_opt:
+    - seccomp:./chrome.json
+    environment:
+      - DISPLAY=${DISPLAY}
+    volumes:
+      - /tmp/.X11-unix:/tmp/.X11-unix
+    network_mode: host
