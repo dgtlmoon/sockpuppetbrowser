@@ -243,15 +243,32 @@ async def launchPuppeteerChromeProxy(websocket, path):
             f"WebSocket ID: {websocket.id} - Throttling/waiting, max connection limit reached {stats['connection_count']} of max {connection_count_max}  ({time.time() - now:.1f}s)")
 
     if DROP_EXCESS_CONNECTIONS:
-        while svmem.percent > memory_use_limit_percent:
-            logger.warning(f"WebSocket ID: {websocket.id} - {svmem.percent}% was > {memory_use_limit_percent}%.. delaying connecting and waiting for more free RAM  ({time.time() - now:.1f}s)")
-            await asyncio.sleep(5)
-            if time.time() - now > 60:
-                logger.critical(
-                    f"WebSocket ID: {websocket.id} - Too long waiting for memory usage to drop, dropping connection. {svmem.percent}% was > {memory_use_limit_percent}%  ({time.time() - now:.1f}s)")
-                await close_socket(websocket)
-                stats['dropped_threshold_reached'] += 1
-                return
+        # Run memory check in executor with timeout to prevent blocking
+        try:
+            loop = asyncio.get_event_loop()
+            svmem = await asyncio.wait_for(loop.run_in_executor(None, psutil.virtual_memory), timeout=2.0)
+            
+            while svmem.percent > memory_use_limit_percent:
+                logger.warning(f"WebSocket ID: {websocket.id} - {svmem.percent}% was > {memory_use_limit_percent}%.. delaying connecting and waiting for more free RAM  ({time.time() - now:.1f}s)")
+                await asyncio.sleep(5)
+                
+                # Get updated memory info with timeout protection
+                try:
+                    svmem = await asyncio.wait_for(loop.run_in_executor(None, psutil.virtual_memory), timeout=2.0)
+                except asyncio.TimeoutError:
+                    logger.warning(f"WebSocket ID: {websocket.id} - Memory check timed out, assuming high memory usage")
+                    svmem = type('obj', (object,), {'percent': 100})  # Default to high value if timeout
+                
+                if time.time() - now > 60:
+                    logger.critical(
+                        f"WebSocket ID: {websocket.id} - Too long waiting for memory usage to drop, dropping connection. {svmem.percent}% was > {memory_use_limit_percent}%  ({time.time() - now:.1f}s)")
+                    await close_socket(websocket)
+                    stats['dropped_threshold_reached'] += 1
+                    return
+        except asyncio.TimeoutError:
+            logger.warning(f"WebSocket ID: {websocket.id} - Initial memory check timed out, skipping memory check")
+        except Exception as e:
+            logger.error(f"WebSocket ID: {websocket.id} - Error checking memory: {str(e)}, skipping memory check")
 
     # Connections that joined but had to wait a long time before being processed
     if DROP_EXCESS_CONNECTIONS:
@@ -373,12 +390,21 @@ async def stats_thread_func():
     global shutdown
 
     while True:
+        # Log connection stats first, so we get at least this message even if memory check blocks
         logger.info(f"Connections: Active count {stats['connection_count']} of max {connection_count_max}, Total processed: {stats['connection_count_total']}.")
         if stats['connection_count'] > connection_count_max:
             logger.warning(f"{stats['connection_count']} of max {connection_count_max} over threshold, incoming connections will be delayed.")
 
-        svmem = psutil.virtual_memory()
-        logger.info(f"Memory: Used {svmem.percent}% (Limit {memory_use_limit_percent}%) - Available {svmem.free / 1024 / 1024:.1f}MB.")
+        # Run potentially blocking system calls in thread executor with timeout
+        try:
+            # Run directly in executor without wrapping in create_task
+            loop = asyncio.get_event_loop()
+            svmem = await asyncio.wait_for(loop.run_in_executor(None, psutil.virtual_memory), timeout=2.0)
+            logger.info(f"Memory: Used {svmem.percent}% (Limit {memory_use_limit_percent}%) - Available {svmem.free / 1024 / 1024:.1f}MB.")
+        except asyncio.TimeoutError:
+            logger.warning("Memory stats check timed out, skipping this iteration")
+        except Exception as e:
+            logger.error(f"Error getting memory stats: {str(e)}")
 
         await asyncio.sleep(stats_refresh_time)
 

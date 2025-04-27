@@ -8,11 +8,32 @@ from functools import partial
 async def handle_http_request(request, stats):
     # Create a task with timeout to prevent blocking during high load
     try:
-        # Run the potentially CPU-intensive operations in a separate thread
+        # Run the potentially CPU-intensive operations in a separate thread with timeouts
         loop = asyncio.get_event_loop()
-        svmem = await loop.run_in_executor(None, psutil.virtual_memory)
-        parent = psutil.Process(os.getpid())
-        child_count = await loop.run_in_executor(None, partial(len, parent.children(recursive=False)))
+        
+        # Set timeout for system operations (3 seconds)
+        TIMEOUT = 3
+        
+        # Use asyncio.wait_for to enforce timeouts on executor tasks
+        try:
+            svmem_task = asyncio.create_task(loop.run_in_executor(None, psutil.virtual_memory))
+            svmem = await asyncio.wait_for(svmem_task, timeout=TIMEOUT)
+            
+            parent = psutil.Process(os.getpid())
+            child_count_task = asyncio.create_task(loop.run_in_executor(None, partial(len, parent.children(recursive=False))))
+            child_count = await asyncio.wait_for(child_count_task, timeout=TIMEOUT)
+            
+            mem_use_percent = svmem.percent
+            
+        except asyncio.TimeoutError:
+            # If system calls timeout, use fallback values
+            logger.warning("System monitoring calls timed out in stats endpoint")
+            child_count = stats.get('last_child_count', 0)
+            mem_use_percent = stats.get('last_mem_percent', 0)
+        else:
+            # Save latest successful values for future fallback
+            stats['last_child_count'] = child_count
+            stats['last_mem_percent'] = mem_use_percent
 
         data = {
             'active_connections': stats['connection_count'],
@@ -20,7 +41,7 @@ async def handle_http_request(request, stats):
             'connection_count_total': stats['connection_count_total'],
             'dropped_threshold_reached': stats['dropped_threshold_reached'],
             'dropped_waited_too_long': stats['dropped_waited_too_long'],
-            'mem_use_percent': svmem.percent,
+            'mem_use_percent': mem_use_percent,
             'special_counter_len': len(stats['special_counter']),
         }
 
