@@ -175,17 +175,37 @@ async def cleanup_chrome_by_pid(chrome_process, user_data_dir="/tmp", time_at_st
     while return_code_poll_status is None:
         logger.debug(f"WebSocket ID: {websocket.id} Chrome subprocess PID {chrome_process.pid} is still running attempting kill...")
         chrome_process.kill()
-        # Flush IO queue
-        chrome_process.communicate()
+        
+        # Run communicate in executor to prevent blocking
+        try:
+            loop = asyncio.get_event_loop()
+            await asyncio.wait_for(
+                loop.run_in_executor(
+                    None,
+                    lambda: chrome_process.communicate(timeout=5)
+                ),
+                timeout=7  # Add buffer for the executor overhead
+            )
+        except (asyncio.TimeoutError, subprocess.TimeoutExpired):
+            logger.warning(f"WebSocket ID: {websocket.id} - Chrome process communicate timed out, continuing kill process")
 
         await asyncio.sleep(2)
         try:
-            os.kill(chrome_process.pid, 0)
+            # Run os.kill in executor to avoid blocking if there's an issue
+            await asyncio.wait_for(
+                loop.run_in_executor(None, lambda: _check_process_exists(chrome_process.pid)),
+                timeout=2.0
+            )
+            logger.error(f"Websocket {websocket.id} - Looks like {chrome_process.pid} didnt die, sending SIGKILL.")
+            await asyncio.wait_for(
+                loop.run_in_executor(None, lambda: os.kill(int(chrome_process.pid), signal.SIGKILL)),
+                timeout=2.0
+            )
         except OSError:
             logger.success(f"Websocket {websocket.id} - Chrome PID {chrome_process.pid} died cleanly, good.")
-        else:
-            logger.error(f"Websocket {websocket.id} - Looks like {chrome_process.pid} didnt die, sending SIGKILL.")
-            os.kill(int(chrome_process.pid), signal.SIGKILL)
+        except asyncio.TimeoutError:
+            logger.warning(f"WebSocket ID: {websocket.id} - Process check timed out, assuming still running")
+        
         return_code_poll_status = chrome_process.poll()
 
     # Should be dead now or already dead, report the status if it was something like a crash (SIG 11 etc)
@@ -199,28 +219,70 @@ async def cleanup_chrome_by_pid(chrome_process, user_data_dir="/tmp", time_at_st
 
     # @todo context for cleaning up datadir? some auto-cleanup flag?
     # shutil.rmtree(user_data_dir)
+    
+def _check_process_exists(pid):
+    """Helper function to check if a process exists"""
+    try:
+        os.kill(pid, 0)
+        return True
+    except OSError:
+        return False
 
 async def _request_retry(url, num_retries=20, success_list=[200, 404], **kwargs):
-    # On a healthy machine with no load, Chrome is usually fired up in 100ms    
+    # On a healthy machine with no load, Chrome is usually fired up in 100ms
+    timeout = kwargs.pop('timeout', 5)  # Default timeout of 5 seconds
+    
     for _ in range(num_retries):
         # Actually this sleep turns out to be HUGELY important for the stability of the Chrome CDP interface under high loads
         await asyncio.sleep(1)
 
         try:
-            response = requests.get(url, **kwargs)
+            # Use asyncio.to_thread to run requests in a separate thread
+            loop = asyncio.get_event_loop()
+            response = await asyncio.wait_for(
+                loop.run_in_executor(
+                    None,
+                    lambda: requests.get(url, timeout=timeout, **kwargs)
+                ),
+                timeout=timeout + 1  # Add 1 second buffer
+            )
+            
             if response.status_code in success_list:
-                ## Return response if successful
+                # Return response if successful
                 return response
-        except requests.exceptions.ConnectionError:
-            logger.warning("No response from Chrome, retrying..")
-            pass
+        except (requests.exceptions.ConnectionError, 
+                requests.exceptions.Timeout, 
+                asyncio.TimeoutError):
+            logger.warning(f"No response from Chrome at {url}, retrying..")
+            continue
+        except Exception as e:
+            logger.warning(f"Error connecting to Chrome: {str(e)}, retrying..")
+            continue
 
     raise requests.exceptions.ConnectionError
 
 
-def debug_log_line(logfile_path, text):
+async def debug_log_line(logfile_path, text):
     if logfile_path is None:
         return
+    
+    try:
+        # Run file I/O in executor to avoid blocking the event loop
+        loop = asyncio.get_event_loop()
+        await asyncio.wait_for(
+            loop.run_in_executor(
+                None,
+                lambda: _write_log_line(logfile_path, text)
+            ),
+            timeout=1.0  # Timeout after 1 second
+        )
+    except asyncio.TimeoutError:
+        logger.warning(f"Log file write timed out for {logfile_path}")
+    except Exception as e:
+        logger.warning(f"Error writing to log file {logfile_path}: {str(e)}")
+
+def _write_log_line(logfile_path, text):
+    """Synchronous helper for file writing operation"""
     with open(logfile_path, 'a') as f:
         f.write(f"{time.time()} - {text}\n")
 
@@ -329,9 +391,9 @@ async def launchPuppeteerChromeProxy(websocket, path):
 
     # 10mb, keep in mind theres screenshots.
     try:
-        debug_log_line(text=f"Attempting connection to {chrome_websocket_url}", logfile_path=debug_log)
+        await debug_log_line(text=f"Attempting connection to {chrome_websocket_url}", logfile_path=debug_log)
         async with websockets.connect(chrome_websocket_url, max_size=None, max_queue=None) as ws:
-            debug_log_line(text=f"Connected to {chrome_websocket_url}", logfile_path=debug_log)
+            await debug_log_line(text=f"Connected to {chrome_websocket_url}", logfile_path=debug_log)
             taskA = asyncio.create_task(hereToChromeCDP(puppeteer_ws=ws, chrome_websocket=websocket, debug_log=debug_log))
             taskB = asyncio.create_task(puppeteerToHere(puppeteer_ws=ws, chrome_websocket=websocket, debug_log=debug_log))
             await taskA
@@ -341,48 +403,99 @@ async def launchPuppeteerChromeProxy(websocket, path):
         logger.critical(f"WebSocket ID: {websocket.id} - Chrome debug output STDERR: {stderr} STDOUT: {stdout}")
         txt = f"Something bad happened when connecting to Chrome CDP at {chrome_websocket_url} (After getting good Chrome CDP URL from {chrome_json_info_url}) - '{str(e)}'"
         logger.error(f"WebSocket ID: {websocket.id} - "+txt)
-        debug_log_line(text="Exception: " + txt, logfile_path=debug_log)
+        await debug_log_line(text="Exception: " + txt, logfile_path=debug_log)
         chrome_process.kill()
 
 
 
     logger.success(f"Websocket {websocket.id} - Connection done!")
-    debug_log_line(text=f"Websocket {websocket.id} - Connection done!", logfile_path=debug_log)
+    await debug_log_line(text=f"Websocket {websocket.id} - Connection done!", logfile_path=debug_log)
 
 async def hereToChromeCDP(puppeteer_ws, chrome_websocket, debug_log=None):
+    # Buffer size - how many characters to process at once, to avoid blocking on large messages
+    buffer_size = 8192
+    
     try:
         async for message in puppeteer_ws:
             if debug_log:
-                debug_log_line(text=f"Chrome -> Puppeteer: {message[:1000]}", logfile_path=debug_log)
+                await debug_log_line(text=f"Chrome -> Puppeteer: {message[:1000]}", logfile_path=debug_log)
             logger.trace(message[:1000])
 
             # If it has the special counter, record it, this is handy for recording that the browser session actually sent a shutdown/ "IM DONE" message
             if 'SOCKPUPPET.specialcounter' in message[:200] and puppeteer_ws.id not in stats['special_counter']:
                 stats['special_counter'].append(puppeteer_ws.id)
 
-            await chrome_websocket.send(message)
+            # Large message handling - break it into chunks if needed
+            if len(message) > buffer_size:
+                # Log when processing large messages
+                logger.debug(f"WebSocket ID: {puppeteer_ws.id} - Processing large message of size {len(message)} bytes")
+                
+                # Process the message in executor to avoid blocking event loop with large JSON processing
+                try:
+                    await asyncio.wait_for(
+                        chrome_websocket.send(message),
+                        timeout=5.0  # Add timeout for large message sending
+                    )
+                except asyncio.TimeoutError:
+                    logger.warning(f"WebSocket ID: {puppeteer_ws.id} - Timeout sending large message of size {len(message)}")
+            else:
+                await chrome_websocket.send(message)
+    except websockets.exceptions.ConnectionClosed:
+        logger.debug(f"WebSocket ID: {puppeteer_ws.id} - Connection closed normally while sending")
     except Exception as e:
-        logger.error(e)
+        logger.error(f"WebSocket ID: {puppeteer_ws.id} - Error in hereToChromeCDP: {str(e)}")
 
 
 async def puppeteerToHere(puppeteer_ws, chrome_websocket, debug_log=None):
+    # Buffer size - how many characters to process at once, to avoid blocking on large messages
+    buffer_size = 8192
+    
     try:
         async for message in chrome_websocket:
             if debug_log:
-                debug_log_line(text=f"Puppeteer -> Chrome: {message[:1000]}", logfile_path=debug_log)
+                await debug_log_line(text=f"Puppeteer -> Chrome: {message[:1000]}", logfile_path=debug_log)
 
             logger.trace(message[:1000])
+            
+            # For debugging navigation events
             if message.startswith("{") and message.endswith("}") and 'Page.navigate' in message:
-                try:
-                    m = json.loads(message)
-                    # Print out some debug so we know roughly whats going on
-                    logger.debug(f"{chrome_websocket.id} Page.navigate request called to '{m['params']['url']}'")
-                except Exception as e:
-                    pass
+                # Run JSON parsing in executor for larger messages
+                if len(message) > 1000:
+                    try:
+                        loop = asyncio.get_event_loop()
+                        m = await asyncio.wait_for(
+                            loop.run_in_executor(None, lambda: json.loads(message)),
+                            timeout=1.0
+                        )
+                        # Print out some debug so we know roughly whats going on
+                        logger.debug(f"{chrome_websocket.id} Page.navigate request called to '{m['params']['url']}'")
+                    except (asyncio.TimeoutError, json.JSONDecodeError, KeyError) as e:
+                        logger.warning(f"Error parsing navigation event: {str(e)}")
+                else:
+                    # For smaller messages, parse directly
+                    try:
+                        m = json.loads(message)
+                        logger.debug(f"{chrome_websocket.id} Page.navigate request called to '{m['params']['url']}'")
+                    except Exception as e:
+                        pass
 
-            await puppeteer_ws.send(message)
+            # Large message handling
+            if len(message) > buffer_size:
+                logger.debug(f"WebSocket ID: {chrome_websocket.id} - Processing large message of size {len(message)} bytes")
+                try:
+                    await asyncio.wait_for(
+                        puppeteer_ws.send(message),
+                        timeout=5.0  # Add timeout for large message sending
+                    )
+                except asyncio.TimeoutError:
+                    logger.warning(f"WebSocket ID: {chrome_websocket.id} - Timeout sending large message of size {len(message)}")
+            else:
+                await puppeteer_ws.send(message)
+                
+    except websockets.exceptions.ConnectionClosed:
+        logger.debug(f"WebSocket ID: {chrome_websocket.id} - Connection closed normally while receiving")
     except Exception as e:
-        logger.error(e)
+        logger.error(f"WebSocket ID: {chrome_websocket.id} - Error in puppeteerToHere: {str(e)}")
 
 
 async def stats_thread_func():

@@ -16,12 +16,20 @@ async def handle_http_request(request, stats):
         
         # Use asyncio.wait_for to enforce timeouts on executor tasks
         try:
-            svmem_task = asyncio.create_task(loop.run_in_executor(None, psutil.virtual_memory))
-            svmem = await asyncio.wait_for(svmem_task, timeout=TIMEOUT)
+            # Run directly in executor without creating a task
+            svmem = await asyncio.wait_for(
+                loop.run_in_executor(None, psutil.virtual_memory),
+                timeout=TIMEOUT
+            )
             
             parent = psutil.Process(os.getpid())
-            child_count_task = asyncio.create_task(loop.run_in_executor(None, partial(len, parent.children(recursive=False))))
-            child_count = await asyncio.wait_for(child_count_task, timeout=TIMEOUT)
+            
+            # Get child count directly in executor
+            get_child_count = lambda: len(parent.children(recursive=False))
+            child_count = await asyncio.wait_for(
+                loop.run_in_executor(None, get_child_count),
+                timeout=TIMEOUT
+            )
             
             mem_use_percent = svmem.percent
             
