@@ -51,6 +51,7 @@ async def handle_http_request(request, stats):
             'dropped_waited_too_long': stats['dropped_waited_too_long'],
             'mem_use_percent': mem_use_percent,
             'special_counter_len': len(stats['special_counter']),
+            'chrome_start_failures': stats['chrome_start_failures']
         }
 
         return web.json_response(data, content_type='application/json')
