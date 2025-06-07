@@ -1,9 +1,16 @@
 #!/usr/bin/env python3
-from distutils.util import strtobool
 
 # Auto scaling websocket proxy for Chrome CDP
 
-from distutils.util import strtobool
+def strtobool(val):
+    """Convert a string representation of truth to true (1) or false (0)."""
+    val = val.lower()
+    if val in ('y', 'yes', 't', 'true', 'on', '1'):
+        return True
+    elif val in ('n', 'no', 'f', 'false', 'off', '0'):
+        return False
+    else:
+        raise ValueError(f"invalid truth value {val!r}")
 from http_server import start_http_server
 from ports import PortSelector
 from loguru import logger
@@ -56,13 +63,18 @@ def getBrowserArgsFromQuery(query, dashdash=True):
         extra_args = {}
     from urllib.parse import urlparse, parse_qs
     parsed_url = urlparse(query)
-    for k, v in parse_qs(parsed_url.query).items():
+    for k, v in parse_qs(parsed_url.query, keep_blank_values=True).items():
         if dashdash:
             if k.startswith('--'):
-                extra_args.append(f"{k}={v[0]}")
+                # Handle flags without values (like --disable-http2)
+                if v and len(v) > 0:
+                    extra_args.append(f"{k}={v[0]}")
+                else:
+                    extra_args.append(k)
         else:
             if not k.startswith('--'):
-                extra_args[k] = v[0]
+                if v and len(v) > 0:
+                    extra_args[k] = v[0]
 
     return extra_args
 
@@ -139,7 +151,9 @@ async def launch_chrome(port=19222, user_data_dir="/tmp", url_query="", headful=
             if flag in chrome_run:
                 chrome_run.remove(flag)
 
-    chrome_run += args
+    # Strip trailing '=' from Chrome flags that don't have values
+    cleaned_args = [arg.rstrip('=') if arg.startswith('--') else arg for arg in args]
+    chrome_run += cleaned_args
 
     # If window-size was not the query (it would be inserted above) so fall back to env vars
     if not '--window-size' in url_query:
@@ -184,6 +198,7 @@ async def launch_chrome(port=19222, user_data_dir="/tmp", url_query="", headful=
                     "-a",  # automatically pick available display
                     "-s", "-screen 0 1920x1080x24 -ac +extension GLX +extension RANDR +extension RENDER +extension DAMAGE +extension XINERAMA +extension MIT-SHM +extension XTEST +extension SYNC -dpi 96 -fbdir /var/tmp -fp /usr/share/fonts/X11/misc,/usr/share/fonts/X11/Type1"
                 ] + chrome_run
+                logger.debug(f"{websocket.id} launching chrome {xvfb_cmd}")
                 return subprocess.Popen(
                     args=xvfb_cmd,
                     shell=False,
@@ -194,6 +209,7 @@ async def launch_chrome(port=19222, user_data_dir="/tmp", url_query="", headful=
                     env=chrome_env
                 )
             else:
+                logger.debug(f"{websocket.id} launching chrome {chrome_run}")
                 return subprocess.Popen(
                     args=chrome_run, 
                     shell=False, 
@@ -321,9 +337,11 @@ async def cleanup_chrome_by_pid(chrome_process, user_data_dir="/tmp", time_at_st
                     kill_tasks = []
                     for pid in child_pids:
                         kill_tasks.append(
-                            asyncio.wait_for(
-                                loop.run_in_executor(None, lambda p=pid: _kill_process_safe(p, signal.SIGKILL)),
-                                timeout=1.0
+                            asyncio.create_task(
+                                asyncio.wait_for(
+                                    loop.run_in_executor(None, lambda p=pid: _kill_process_safe(p, signal.SIGKILL)),
+                                    timeout=1.0
+                                )
                             )
                         )
                     # Wait for all kills to complete with a short timeout
@@ -361,18 +379,44 @@ async def cleanup_chrome_by_pid(chrome_process, user_data_dir="/tmp", time_at_st
                 # Process might already be gone
                 pass
         
-        # Final check - if process still exists, log a warning but continue
+        # Final check and force kill if still running
         try:
             is_still_running = await asyncio.wait_for(
                 loop.run_in_executor(None, lambda: _check_process_exists(chrome_process.pid)),
                 timeout=1.0
             )
             if is_still_running:
-                logger.warning(f"WebSocket ID: {websocket.id} - Chrome PID {chrome_process.pid} might still be running after cleanup")
+                logger.warning(f"WebSocket ID: {websocket.id} - Chrome PID {chrome_process.pid} still running after cleanup, forcing kill -9")
+                # Force kill with SIGKILL as absolute final step
+                await asyncio.wait_for(
+                    loop.run_in_executor(None, lambda: _kill_process_safe(chrome_process.pid, signal.SIGKILL)),
+                    timeout=1.0
+                )
+                # One more check after force kill
+                await asyncio.sleep(0.2)
+                try:
+                    final_check = await asyncio.wait_for(
+                        loop.run_in_executor(None, lambda: _check_process_exists(chrome_process.pid)),
+                        timeout=0.5
+                    )
+                    if final_check:
+                        logger.error(f"WebSocket ID: {websocket.id} - Chrome PID {chrome_process.pid} STILL running even after kill -9")
+                    else:
+                        logger.debug(f"WebSocket ID: {websocket.id} - Chrome PID {chrome_process.pid} finally terminated with kill -9")
+                except asyncio.TimeoutError:
+                    logger.warning(f"WebSocket ID: {websocket.id} - Final kill check timed out")
             else:
                 logger.debug(f"WebSocket ID: {websocket.id} - Chrome PID {chrome_process.pid} successfully terminated")
         except asyncio.TimeoutError:
-            logger.warning(f"WebSocket ID: {websocket.id} - Final process check timed out")
+            logger.warning(f"WebSocket ID: {websocket.id} - Final process check timed out, attempting force kill anyway")
+            # If check timed out, try force kill anyway
+            try:
+                await asyncio.wait_for(
+                    loop.run_in_executor(None, lambda: _kill_process_safe(chrome_process.pid, signal.SIGKILL)),
+                    timeout=1.0
+                )
+            except asyncio.TimeoutError:
+                logger.error(f"WebSocket ID: {websocket.id} - Force kill also timed out")
     except Exception as e:
         logger.error(f"WebSocket ID: {websocket.id} - Error in Chrome cleanup: {str(e)}")
 
@@ -516,8 +560,8 @@ async def launchPuppeteerChromeProxy(websocket, path):
     # Check for headful mode from query string or environment
     args = getBrowserArgsFromQuery(path, dashdash=False)
     headful_mode = (
-        args.get('headful', '').lower() in ['true', '1'] or 
-        os.getenv('CHROME_HEADFUL', 'false').lower() in ['true', '1']
+        strtobool(args.get('headful', 'false')) or 
+        strtobool(os.getenv('CHROME_HEADFUL', 'false'))
     )
     
     try:
