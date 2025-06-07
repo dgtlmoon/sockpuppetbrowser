@@ -1,2 +1,23 @@
-.venv
+# Byte-compiled / optimized / DLL files
+**/__pycache__
+**/*.py[cod]
+
+# Caches
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
+
+# Distribution / packaging
+build/
+dist/
+*.egg-info*
+
+# Virtual environment
+.env
+.venv/
+venv/
+.python-version
+
+# IDEs
 .idea
+.vscode/settings.json

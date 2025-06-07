@@ -1,4 +1,4 @@
-FROM zenika/alpine-chrome:119-with-playwright
+FROM zenika/alpine-chrome:131-with-playwright
 LABEL org.opencontainers.image.source="https://github.com/dgtlmoon/sockpuppetbrowser"
 
 # docker build -t test .
@@ -7,10 +7,14 @@ LABEL org.opencontainers.image.source="https://github.com/dgtlmoon/sockpuppetbro
 USER root
 ENV PYTHONUNBUFFERED=1
 ENV LOG_LEVEL=DEBUG
-RUN apk add --update --no-cache python3 python3-dev musl-dev linux-headers && ln -sf python3 /usr/bin/python
+RUN apk add --update --no-cache python3 python3-dev musl-dev linux-headers xvfb xvfb-run openbox && ln -sf python3 /usr/bin/python
 RUN python3 -m ensurepip
 RUN pip3 install --upgrade pip
 RUN pip3 install --no-cache --upgrade pip setuptools virtualenv
+# Copy and setup entrypoint script
+COPY entrypoint.sh /usr/local/bin/entrypoint.sh
+RUN chmod +x /usr/local/bin/entrypoint.sh
+
 USER chrome
 
 #@todo Add some random collection of fonts and other stuff to blur the fingerprint a bit
@@ -23,6 +27,7 @@ USER chrome
 
 COPY requirements.txt /usr/src/app/requirements.txt
 COPY backend/* /usr/src/app/
+COPY chrome.json /usr/src/app/
 
 WORKDIR /usr/src/app
 
@@ -32,4 +37,4 @@ ENV CHROME_BIN=/usr/bin/chromium-browser \
 #ENV CHROMIUM_FLAGS="--disable-software-rasterizer --disable-dev-shm-usage"
 
 RUN python3 -m venv . && . ./bin/activate && ./bin/pip3 install -r requirements.txt
-CMD . ./bin/activate . && python3 ./server.py
+CMD ["/usr/local/bin/entrypoint.sh"]
