@@ -54,6 +54,31 @@ docker run --rm --security-opt seccomp=$(pwd)/chrome.json -p 127.0.0.1:3000:3000
 
 `seccomp` security setting is _highly_ recommended https://github.com/Zenika/alpine-chrome?tab=readme-ov-file#-the-best-with-seccomp
 
+### Headful Mode with Virtual Display
+
+By default, Chrome runs in headless mode for maximum performance. However, you can enable "headful" mode which runs Chrome with a virtual X server (Xvfb) for scenarios requiring visual rendering or when certain websites detect headless browsers.
+
+**Enable headful mode:**
+```
+ws://127.0.0.1:3000/?headful=true
+```
+
+Or via environment variable:
+```bash
+docker run --rm -e CHROME_HEADFUL=true --security-opt seccomp=$(pwd)/chrome.json -p 127.0.0.1:3000:3000 dgtlmoon/sockpuppetbrowser
+```
+
+**Headful mode features:**
+- Each Chrome instance gets its own isolated virtual display using `xvfb-run -a`
+- Automatic display allocation and cleanup when Chrome exits
+- Scales efficiently - hundreds of concurrent headful browsers supported
+- Better compatibility with websites that detect automation
+- Supports visual rendering, screenshots, and DOM operations that require a display
+
+**Performance considerations:**
+- Headless mode: ~150+ concurrent browsers per 16-core CPU
+- Headful mode: Slightly higher memory usage due to Xvfb processes, but still scales well
+
 ### Statistics
 
 Access `http://127.0.0.1:8080/stats` or which ever hostname you bind to, use `--sport` to specify something other than `8080`

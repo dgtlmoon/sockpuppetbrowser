@@ -29,6 +29,9 @@ stats = {
     'chrome_start_failures': 0,
 }
 
+# Global dictionary to track display numbers by Chrome PID
+chrome_XVFB_displayers = {}
+
 connection_count_max = int(os.getenv('MAX_CONCURRENT_CHROME_PROCESSES', 10))
 port_selector = PortSelector()
 shutdown = False
@@ -64,7 +67,7 @@ def getBrowserArgsFromQuery(query, dashdash=True):
     return extra_args
 
 
-async def launch_chrome(port=19222, user_data_dir="/tmp", url_query="", headful=False):
+async def launch_chrome(port=19222, user_data_dir="/tmp", url_query="", headful=False, websocket=None):
     args = getBrowserArgsFromQuery(url_query)
     # CHROME_BIN set in Dockerfile
     chrome_location = os.getenv("CHROME_BIN", "/usr/bin/google-chrome")
@@ -161,13 +164,11 @@ async def launch_chrome(port=19222, user_data_dir="/tmp", url_query="", headful=
             logger.warning("Creating temp directory timed out, using default")
             chrome_run.append("--user-data-dir=/tmp/chrome-puppeteer-proxy-default")
 
-    # Set up environment for headful mode (Xvfb should already be running)
+    # Set up environment
     chrome_env = os.environ.copy()
     
     if headful:
-        # Ensure DISPLAY is set for headful mode
-        chrome_env["DISPLAY"] = os.getenv("DISPLAY", ":99")
-        logger.debug(f"Using headful mode with display {chrome_env['DISPLAY']}")
+        logger.debug(f"Using headful mode with xvfb-run (auto display allocation)")
 
     # Run Popen in executor to prevent blocking with a 20-second timeout
     try:
@@ -176,20 +177,55 @@ async def launch_chrome(port=19222, user_data_dir="/tmp", url_query="", headful=
             
         # Wrap subprocess.Popen in a lambda for the executor
         def create_chrome_process():
-            return subprocess.Popen(
-                args=chrome_run, 
-                shell=False, 
-                stdout=subprocess.PIPE, 
-                stderr=subprocess.PIPE, 
-                bufsize=1, 
-                universal_newlines=True,
-                env=chrome_env
-            )
+            if headful:
+                # Use xvfb-run for headful mode - automatically manages display and cleanup
+                xvfb_cmd = [
+                    "xvfb-run", 
+                    "-a",  # automatically pick available display
+                    "-s", "-screen 0 1920x1080x24 -ac +extension GLX +extension RANDR +extension RENDER +extension DAMAGE +extension XINERAMA +extension MIT-SHM +extension XTEST +extension SYNC -dpi 96 -fbdir /var/tmp -fp /usr/share/fonts/X11/misc,/usr/share/fonts/X11/Type1"
+                ] + chrome_run
+                return subprocess.Popen(
+                    args=xvfb_cmd,
+                    shell=False,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    bufsize=1,
+                    universal_newlines=True,
+                    env=chrome_env
+                )
+            else:
+                return subprocess.Popen(
+                    args=chrome_run, 
+                    shell=False, 
+                    stdout=subprocess.PIPE, 
+                    stderr=subprocess.PIPE, 
+                    bufsize=1, 
+                    universal_newlines=True,
+                    env=chrome_env
+                )
             
         process = await asyncio.wait_for(
             loop.run_in_executor(None, create_chrome_process),
             timeout=20.0  # 20 second timeout as requested
         )
+        
+        # Start logging tasks for stdout/stderr
+        async def log_stream(stream, log_func, prefix):
+            try:
+                while True:
+                    line = await loop.run_in_executor(None, stream.readline)
+                    if not line:
+                        break
+                    websocket_id = websocket.id if websocket else "unknown"
+                    log_func(f"WebSocket ID: {websocket_id} {prefix} PID {process.pid}: {line.strip()}")
+            except Exception as e:
+                logger.warning(f"Error in log_stream for {prefix}: {str(e)}")
+        
+        # Create logging tasks for Chrome output
+        if process.stdout:
+            asyncio.create_task(log_stream(process.stdout, logger.debug, "Chrome stdout"))
+        if process.stderr:
+            asyncio.create_task(log_stream(process.stderr, logger.critical, "Chrome stderr"))
     except asyncio.TimeoutError:
         logger.critical("Chrome process creation timed out after 20 seconds")
         raise RuntimeError("Chrome startup timed out")
@@ -486,7 +522,7 @@ async def launchPuppeteerChromeProxy(websocket, path):
     
     try:
         # Make sure to handle asyncio properly
-        chrome_process = await launch_chrome(port=port, url_query=path, headful=headful_mode)
+        chrome_process = await launch_chrome(port=port, url_query=path, headful=headful_mode, websocket=websocket)
     except (asyncio.TimeoutError, RuntimeError) as e:
         logger.critical(f"WebSocket ID: {websocket.id} - Chrome launch failed: {str(e)}")
         stats['chrome_start_failures'] += 1

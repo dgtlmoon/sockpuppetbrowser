@@ -1,4 +1,4 @@
-FROM zenika/alpine-chrome:119-with-playwright
+FROM zenika/alpine-chrome:131-with-playwright
 LABEL org.opencontainers.image.source="https://github.com/dgtlmoon/sockpuppetbrowser"
 
 # docker build -t test .
