@@ -64,7 +64,7 @@ def getBrowserArgsFromQuery(query, dashdash=True):
     return extra_args
 
 
-async def launch_chrome(port=19222, user_data_dir="/tmp", url_query=""):
+async def launch_chrome(port=19222, user_data_dir="/tmp", url_query="", headful=False):
     args = getBrowserArgsFromQuery(url_query)
     # CHROME_BIN set in Dockerfile
     chrome_location = os.getenv("CHROME_BIN", "/usr/bin/google-chrome")
@@ -99,7 +99,6 @@ async def launch_chrome(port=19222, user_data_dir="/tmp", url_query=""):
         "--enable-logging=stderr",
         "--export-tagged-pdf",
         "--force-color-profile=srgb",
-        "--headless",
         "--hide-scrollbars",
         "--log-level=2",
         "--metrics-recording-only",
@@ -111,6 +110,31 @@ async def launch_chrome(port=19222, user_data_dir="/tmp", url_query=""):
         "--v1=1",
         f"--remote-debugging-port={port}"
     ]
+
+    # Add headless flag only if not in headful mode
+    if not headful:
+        chrome_run.append("--headless")
+    
+    # Additional anti-detection flags for headful mode
+    if headful:
+        chrome_run.extend([
+            "--start-maximized",
+            "--disable-infobars",
+            "--disable-default-apps",
+            "--disable-extensions-file-access-check",
+            "--disable-plugins-discovery",
+            "--disable-translate",
+            "--disable-plugins",
+            "--disable-geolocation"
+        ])
+        # Remove some automation-detection flags when in headful mode
+        automation_flags_to_remove = [
+            "--disable-blink-features=AutomationControlled",
+            "--enable-blink-features=IdleDetection"
+        ]
+        for flag in automation_flags_to_remove:
+            if flag in chrome_run:
+                chrome_run.remove(flag)
 
     chrome_run += args
 
@@ -137,6 +161,14 @@ async def launch_chrome(port=19222, user_data_dir="/tmp", url_query=""):
             logger.warning("Creating temp directory timed out, using default")
             chrome_run.append("--user-data-dir=/tmp/chrome-puppeteer-proxy-default")
 
+    # Set up environment for headful mode (Xvfb should already be running)
+    chrome_env = os.environ.copy()
+    
+    if headful:
+        # Ensure DISPLAY is set for headful mode
+        chrome_env["DISPLAY"] = os.getenv("DISPLAY", ":99")
+        logger.debug(f"Using headful mode with display {chrome_env['DISPLAY']}")
+
     # Run Popen in executor to prevent blocking with a 20-second timeout
     try:
         # Always get a fresh event loop reference to ensure it's defined
@@ -150,7 +182,8 @@ async def launch_chrome(port=19222, user_data_dir="/tmp", url_query=""):
                 stdout=subprocess.PIPE, 
                 stderr=subprocess.PIPE, 
                 bufsize=1, 
-                universal_newlines=True
+                universal_newlines=True,
+                env=chrome_env
             )
             
         process = await asyncio.wait_for(
@@ -443,9 +476,17 @@ async def launchPuppeteerChromeProxy(websocket, path):
     now_before_chrome_launch = time.time()
 
     port = next(port_selector)
+    
+    # Check for headful mode from query string or environment
+    args = getBrowserArgsFromQuery(path, dashdash=False)
+    headful_mode = (
+        args.get('headful', '').lower() in ['true', '1'] or 
+        os.getenv('CHROME_HEADFUL', 'false').lower() in ['true', '1']
+    )
+    
     try:
         # Make sure to handle asyncio properly
-        chrome_process = await launch_chrome(port=port, url_query=path)
+        chrome_process = await launch_chrome(port=port, url_query=path, headful=headful_mode)
     except (asyncio.TimeoutError, RuntimeError) as e:
         logger.critical(f"WebSocket ID: {websocket.id} - Chrome launch failed: {str(e)}")
         stats['chrome_start_failures'] += 1
