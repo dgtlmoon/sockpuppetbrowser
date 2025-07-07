@@ -54,6 +54,33 @@ docker run --rm --security-opt seccomp=$(pwd)/chrome.json -p 127.0.0.1:3000:3000
 
 `seccomp` security setting is _highly_ recommended https://github.com/Zenika/alpine-chrome?tab=readme-ov-file#-the-best-with-seccomp
 
+## Docker Compose Example
+
+```
+browser-sockpuppet-chrome:
+    hostname: browser-sockpuppet-chrome
+    image: dgtlmoon/sockpuppetbrowser:latest    
+    cap_add:
+      - SYS_ADMIN
+    restart: unless-stopped
+    environment:
+      - TZ=America/Toronto
+      - SCREEN_WIDTH=1920
+      - SCREEN_HEIGHT=1024
+      - SCREEN_DEPTH=16
+      - MAX_CONCURRENT_CHROME_PROCESSES=10    
+```
+
+## Setting Timezone
+
+Environment variable TZ has been added, along with tzdata package. The default value is: `Etc/UTC`.
+
+Timezone can be set as an environment variable, using a value from the time zone database:
+* [Wikipedia - List of TZ Database Time Zones](https://en.wikipedia.org/wiki/List_of_tz_database_time_zones)
+* [IANA - Time Zone Database](https://www.iana.org/time-zones)
+
+This can be verified to be passed into the Docker container in shell by running: `echo $TZ` and `date`.
+
 ### Headful Mode with Virtual Display
 
 By default, Chrome runs in headless mode for maximum performance. However, you can enable "headful" mode which runs Chrome with a virtual X server (Xvfb) for scenarios requiring visual rendering or when certain websites detect headless browsers.

@@ -7,7 +7,8 @@ LABEL org.opencontainers.image.source="https://github.com/dgtlmoon/sockpuppetbro
 USER root
 ENV PYTHONUNBUFFERED=1
 ENV LOG_LEVEL=DEBUG
-RUN apk add --update --no-cache python3 python3-dev musl-dev linux-headers xvfb xvfb-run openbox && ln -sf python3 /usr/bin/python
+ENV TZ="Etc/UTC"
+RUN apk add --update --no-cache python3 python3-dev musl-dev linux-headers xvfb xvfb-run openbox tzdata && ln -sf python3 /usr/bin/python
 RUN python3 -m ensurepip
 RUN pip3 install --upgrade pip
 RUN pip3 install --no-cache --upgrade pip setuptools virtualenv
