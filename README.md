@@ -48,7 +48,7 @@ container directly.
 ## How to run
 
 ```bash
-wget https://raw.githubusercontent.com/jfrazelle/dotfiles/master/etc/docker/seccomp/chrome.json
+wget https://raw.githubusercontent.com/dgtlmoon/sockpuppetbrowser/refs/heads/master/chrome.json
 docker run --rm --security-opt seccomp=$(pwd)/chrome.json -p 127.0.0.1:3000:3000 dgtlmoon/sockpuppetbrowser
 ```
 
