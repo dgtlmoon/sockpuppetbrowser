@@ -1,9 +1,21 @@
 #!/usr/bin/env python3
-from distutils.util import strtobool
 
 # Auto scaling websocket proxy for Chrome CDP
 
-from distutils.util import strtobool
+def strtobool(val):
+    """Convert a string representation of truth to true (1) or false (0).
+
+    True values are 'y', 'yes', 't', 'true', 'on', and '1'; false values
+    are 'n', 'no', 'f', 'false', 'off', and '0'.
+    """
+    val = val.lower()
+    if val in ('y', 'yes', 't', 'true', 'on', '1'):
+        return True
+    elif val in ('n', 'no', 'f', 'false', 'off', '0'):
+        return False
+    else:
+        raise ValueError(f"invalid truth value {val!r}")
+
 from http_server import start_http_server
 from ports import PortSelector
 from loguru import logger
