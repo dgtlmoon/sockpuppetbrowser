@@ -117,6 +117,37 @@ Then the log will contain the CDP session, for example:
 ...
 ```
 
+### Setting Viewport Size
+
+Control the browser viewport dimensions for screenshots and page rendering:
+
+**Via connection URL (recommended):**
+
+When running from in thedocker-compose.yml of changedetection.io project.
+( https://github.com/dgtlmoon/changedetection.io/blob/dev/docker-compose.yml#L21 )
+```
+- PLAYWRIGHT_DRIVER_URL=ws://browser-sockpuppet-chrome:3000/?--window-size=1920,1080
+```
+
+Or configured from inside the changedetection.io interface as a [**Extra Browsers**] from the settings tab. (when run from the same docker-compose.yml)
+
+<img src=docs/cdio-config-extra-browsers.png alt="Setup and choose mobile browser and other dimensions">
+
+Then you can select the viewport size you like in the browser for checking the web-page for changes.
+
+<img src=docs/cdio-browser-selection.png alt="Choosing a different size browser for checking a page for changes.">
+
+
+**Or, via environment variables:**
+
+You can run this container with a different default size.
+
+```bash
+docker run -e SCREEN_WIDTH=1920 -e SCREEN_HEIGHT=1080 --security-opt seccomp=$(pwd)/chrome.json -p 127.0.0.1:3000:3000 dgtlmoon/sockpuppetbrowser
+```
+
+If neither is specified, Chrome will use its default viewport size.
+
 ### Tuning
 
 Some tips on high-concurrency scraping and tuning where you have a lot of chrome browsers running simultaneously
