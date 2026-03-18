@@ -328,6 +328,15 @@ async def cleanup_chrome_by_pid(chrome_process, user_data_dir="/tmp", time_at_st
                     proc.kill()  # SIGKILL immediately - no waiting
                 except (psutil.NoSuchProcess, psutil.AccessDenied):
                     pass
+            # Reap the main chrome process to prevent zombies
+            try:
+                loop = asyncio.get_event_loop()
+                await asyncio.wait_for(
+                    loop.run_in_executor(None, chrome_process.wait),
+                    timeout=5.0
+                )
+            except (asyncio.TimeoutError, Exception) as e:
+                logger.warning(f"WebSocket ID: {websocket.id} - Error reaping Chrome process: {str(e)}")
 
             logger.debug(f"WebSocket ID: {websocket.id} - Chrome PID {chrome_process.pid} cleanup signaled")
         except (psutil.NoSuchProcess, psutil.AccessDenied, OSError):
