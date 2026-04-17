@@ -330,6 +330,19 @@ async def cleanup_chrome_by_pid(chrome_process, user_data_dir="/tmp", time_at_st
                     pass
 
             logger.debug(f"WebSocket ID: {websocket.id} - Chrome PID {chrome_process.pid} cleanup signaled")
+
+            # Reap the process to prevent zombies — kill() alone leaves the
+            # entry in the process table until wait() is called.
+            try:
+                loop = asyncio.get_event_loop()
+                await asyncio.wait_for(
+                    loop.run_in_executor(None, chrome_process.wait),
+                    timeout=5.0
+                )
+                logger.debug(f"WebSocket ID: {websocket.id} - Chrome PID {chrome_process.pid} reaped successfully")
+            except (asyncio.TimeoutError, Exception) as e:
+                logger.warning(f"WebSocket ID: {websocket.id} - Error reaping Chrome process {chrome_process.pid}: {str(e)}")
+
         except (psutil.NoSuchProcess, psutil.AccessDenied, OSError):
             # Fallback to direct kill if psutil fails
             try:
@@ -572,8 +585,21 @@ async def launchPuppeteerChromeProxy(websocket, path):
             await debug_log_line(text=f"Connected to {chrome_websocket_url}", logfile_path=debug_log)
             taskA = asyncio.create_task(hereToChromeCDP(puppeteer_ws=ws, chrome_websocket=websocket, debug_log=debug_log))
             taskB = asyncio.create_task(puppeteerToHere(puppeteer_ws=ws, chrome_websocket=websocket, debug_log=debug_log))
-            await taskA
-            await taskB
+            # Wait for EITHER proxy task to complete, then cancel the other.
+            # When Chrome crashes while the client is idle, taskB blocks forever
+            # on `async for message in chrome_websocket` because the client
+            # WebSocket is still alive. The handler never returns, the
+            # wait_closed() callback never fires, and the connection slot leaks.
+            done, pending = await asyncio.wait(
+                [taskA, taskB],
+                return_when=asyncio.FIRST_COMPLETED
+            )
+            for task in pending:
+                task.cancel()
+                try:
+                    await task
+                except asyncio.CancelledError:
+                    pass
     except Exception as e:
         # Kill chrome first to ensure it stops
         chrome_process.kill()
