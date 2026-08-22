@@ -25,6 +25,7 @@ import orjson
 import os
 import psutil
 import requests
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -80,6 +81,16 @@ def getBrowserArgsFromQuery(query, dashdash=True):
 
     return extra_args
 
+
+def _remove_tmp_user_data_dir(path, websocket_id="unknown"):
+    """Helper function to remove a temp profile dir that we created ourselves"""
+    if not path:
+        return
+    shutil.rmtree(path, ignore_errors=True)
+    if os.path.isdir(path):
+        logger.warning(f"WebSocket ID: {websocket_id} - Could not fully remove temp user-data-dir {path}")
+    else:
+        logger.debug(f"WebSocket ID: {websocket_id} - Removed temp user-data-dir {path}")
 
 async def launch_chrome(port=19222, user_data_dir="/tmp", url_query="", headful=False, websocket=None):
     args = getBrowserArgsFromQuery(url_query)
@@ -164,6 +175,7 @@ async def launch_chrome(port=19222, user_data_dir="/tmp", url_query="", headful=
         else:
             logger.warning(f"No --window-size in query, and no SCREEN_HEIGHT + SCREEN_WIDTH env vars found :-(")
 
+    tmp_user_data_dir = None
     if not '--user-data-dir' in url_query:
         # Run tempfile.mkdtemp in executor to prevent blocking
         loop = asyncio.get_event_loop()
@@ -222,6 +234,7 @@ async def launch_chrome(port=19222, user_data_dir="/tmp", url_query="", headful=
             loop.run_in_executor(None, create_chrome_process),
             timeout=20.0  # 20 second timeout as requested
         )
+        process.tmp_user_data_dir = tmp_user_data_dir
         
         # Start logging tasks for stdout/stderr
         async def log_stream(stream, log_func, prefix):
@@ -243,12 +256,15 @@ async def launch_chrome(port=19222, user_data_dir="/tmp", url_query="", headful=
             process.logging_tasks.append(asyncio.create_task(log_stream(process.stderr, logger.critical, "Chrome stderr")))
     except asyncio.TimeoutError:
         logger.critical("Chrome process creation timed out after 20 seconds")
+        _remove_tmp_user_data_dir(tmp_user_data_dir)
         raise RuntimeError("Chrome startup timed out")
     except FileNotFoundError as e:
         logger.critical(f"Chrome binary was not found at {chrome_location}, aborting!")
+        _remove_tmp_user_data_dir(tmp_user_data_dir)
         raise e
     except Exception as e:
         logger.critical(f"Unexpected error launching Chrome: {str(e)}")
+        _remove_tmp_user_data_dir(tmp_user_data_dir)
         raise RuntimeError(f"Chrome startup failed: {str(e)}")
 
     # Run poll in executor to prevent blocking
@@ -302,7 +318,7 @@ async def stats_disconnect(time_at_start=0.0, websocket: websockets.WebSocketSer
     logger.debug(
         f"Websocket {websocket.id} - Connection ended, processed in {time.time() - time_at_start:.3f}s")
 
-async def cleanup_chrome_by_pid(chrome_process, user_data_dir="/tmp", time_at_start=0.0, websocket: websockets.WebSocketServerProtocol = None):
+async def cleanup_chrome_by_pid(chrome_process, time_at_start=0.0, websocket: websockets.WebSocketServerProtocol = None):
     import signal
     import psutil
 
@@ -341,6 +357,7 @@ async def cleanup_chrome_by_pid(chrome_process, user_data_dir="/tmp", time_at_st
     finally:
         # Always ensure the socket is closed
         await close_socket(websocket)
+        _remove_tmp_user_data_dir(getattr(chrome_process, 'tmp_user_data_dir', None), websocket.id)
 
 def _kill_process_safe(pid, sig):
     """Helper function to kill a process safely, handling exceptions"""
@@ -511,7 +528,7 @@ async def launchPuppeteerChromeProxy(websocket, path):
         return
 
     closed.add_done_callback(lambda task: asyncio.ensure_future(
-        cleanup_chrome_by_pid(chrome_process=chrome_process, user_data_dir='@todo', time_at_start=now, websocket=websocket))
+        cleanup_chrome_by_pid(chrome_process=chrome_process, time_at_start=now, websocket=websocket))
                              )
 
     chrome_json_info_url = f"http://localhost:{port}/json/version"
