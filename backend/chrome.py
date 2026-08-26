@@ -36,6 +36,21 @@ EXIT_POLL_INTERVAL = 0.25
 # Chrome's stderr is noisy; keep the tail around so a startup failure can be reported usefully.
 STARTUP_LOG_LINES = 50
 
+# Lines Chrome always emits in a container and which never indicate a problem. Keeping them
+# out of the kept tail matters: they are the FIRST thing Chrome prints, so otherwise they are
+# what gets quoted back as "Last stderr" when something actually goes wrong.
+BENIGN_STDERR = (
+    "Failed to connect to the bus",
+    "dbus_bus_get_private",
+    "Floating point exception",   # from the GPU probe on headless hosts, harmless
+    "vkCreateInstance",           # no Vulkan driver in the container
+    "Failed to load libEGL",
+)
+
+
+def _is_benign(line):
+    return any(marker in line for marker in BENIGN_STDERR)
+
 XVFB_SCREEN_ARGS = (
     "-screen 0 1920x1080x24 -ac +extension GLX +extension RANDR +extension RENDER "
     "+extension DAMAGE +extension XINERAMA +extension MIT-SHM +extension XTEST "
@@ -265,10 +280,13 @@ class ChromeInstance:
             text = line.decode(errors='replace').rstrip()
             if not text:
                 continue
-            self._startup_log.append(text)
             match = DEVTOOLS_RE.search(text)
             if match:
                 return match.group(1)
+            if _is_benign(text):
+                logger.trace(f"WebSocket ID: {self.conn_id} Chrome stderr PID {self.pid}: {text}")
+                continue
+            self._startup_log.append(text)
             logger.debug(f"WebSocket ID: {self.conn_id} Chrome stderr PID {self.pid}: {text}")
 
     def _devtools_url_from_profile(self):
@@ -298,8 +316,10 @@ class ChromeInstance:
                 if not line:
                     break
                 text = line.decode(errors='replace').rstrip()
-                if text:
-                    logger.debug(f"WebSocket ID: {self.conn_id} Chrome stderr PID {self.pid}: {text}")
+                if not text:
+                    continue
+                level = logger.trace if _is_benign(text) else logger.debug
+                level(f"WebSocket ID: {self.conn_id} Chrome stderr PID {self.pid}: {text}")
         except asyncio.CancelledError:
             raise
         except Exception as e:
@@ -332,6 +352,10 @@ class ChromeInstance:
         if self._killed_by_us:
             logger.debug(f"WebSocket ID: {self.conn_id} - Chrome PID {self.pid} "
                          f"exited rc={self.returncode} (expected, proxy cleanup)")
+        elif self.returncode == 0:
+            # Chrome shut itself down cleanly - normally because the client sent Browser.close.
+            logger.debug(f"WebSocket ID: {self.conn_id} - Chrome PID {self.pid} "
+                         f"exited rc=0 (clean shutdown, client asked it to close)")
         else:
             logger.error(
                 f"WebSocket ID: {self.conn_id} - Chrome PID {self.pid} exited rc={self.returncode} "
@@ -367,7 +391,12 @@ class ChromeInstance:
         self._report_exit()  # may have died since the last poll
         if self.returncode is None:
             return "chrome process: still running at teardown"
-        why = "expected, proxy cleanup" if self._killed_by_us else "UNEXPECTED - Chrome died on its own"
+        if self._killed_by_us:
+            why = "expected, proxy cleanup"
+        elif self.returncode == 0:
+            why = "clean shutdown, client asked it to close"
+        else:
+            why = "UNEXPECTED - Chrome died on its own"
         return f"chrome process: rc={self.returncode} ({why})"
 
     async def aclose(self):
