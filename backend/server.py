@@ -299,12 +299,26 @@ async def main(args):
     connection_semaphore = asyncio.Semaphore(connection_count_max)
 
     stop = asyncio.get_running_loop().create_future()
-    for sig in (signal.SIGINT, signal.SIGTERM):
-        try:
-            asyncio.get_running_loop().add_signal_handler(
-                sig, lambda: stop.done() or stop.set_result(None))
-        except NotImplementedError:
-            pass  # Not available on all platforms
+    
+    # CROSS-PLATFORM SYSTEM SIGNAL HANDLING PATCH
+    import sys
+    if sys.platform == 'win32':
+        # On Windows, use a standard thread-safe callback loop for console closures
+        def win_exit_handler():
+            if not stop.done():
+                stop.set_result(None)
+                
+        # Connect to Windows OS terminal interruption controls
+        signal.signal(signal.SIGINT, lambda sig, frame: win_exit_handler())
+        signal.signal(signal.SIGTERM, lambda sig, frame: win_exit_handler())
+    else:
+        # Standard native Linux event loop signal routing
+        for sig in (signal.SIGINT, signal.SIGTERM):
+            try:
+                asyncio.get_running_loop().add_signal_handler(
+                    sig, lambda: stop.done() or stop.set_result(None))
+            except NotImplementedError:
+                pass
 
     await start_http_server(host=args.host, port=args.sport, stats=stats)
 

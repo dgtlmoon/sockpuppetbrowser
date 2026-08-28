@@ -77,7 +77,15 @@ def parse_query_args(query):
 
 def build_chrome_args(chrome_flags, headful=False):
     """Build the Chrome command line. Returns (argv, user_data_dir_we_created_or_None)."""
-    chrome_location = os.getenv("CHROME_BIN", "/usr/bin/google-chrome")
+
+    # 1. Dynamic Chrome Binary Path Selection
+    import sys
+    if sys.platform == "win32":
+        default_chrome = "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe"
+    else:
+        default_chrome = "/usr/bin/google-chrome"
+        
+    chrome_location = os.getenv("CHROME_BIN", default_chrome)
 
     # Needs chrome 121+ or so, Defaults taken from a live Puppeteer
     # https://github.com/GoogleChrome/chrome-launcher/blob/main/docs/chrome-flags-for-tools.md
@@ -159,7 +167,13 @@ def build_chrome_args(chrome_flags, headful=False):
 
     owned_user_data_dir = None
     if '--user-data-dir' not in supplied:
-        owned_user_data_dir = tempfile.mkdtemp(prefix="chrome-puppeteer-proxy", dir="/tmp")
+        # 3. Dynamic Temporary Profile Directory Selection
+        if sys.platform == "win32":
+            tmp_dir = tempfile.gettempdir()
+        else:
+            tmp_dir = "/tmp"
+            
+        owned_user_data_dir = tempfile.mkdtemp(prefix="chrome-puppeteer-proxy", dir=tmp_dir)
         chrome_run.append(f"--user-data-dir={owned_user_data_dir}")
         logger.debug(f"No user-data-dir in query, using {owned_user_data_dir}")
 
@@ -427,11 +441,28 @@ class ChromeInstance:
         self._cleanup_profile()
 
     def _kill_tree(self):
-        """SIGKILL the browser and every renderer/GPU child it spawned."""
+        """SIGKILL the browser and every renderer/GPU child it spawned cleanly across OS layers."""
+        import sys
+        
+        # WINDOWS PROCESS TREE CLEANUP PATCH
+        if sys.platform == "win32" and self._owned_user_data_dir:
+            try:
+                import subprocess
+                logger.debug(f"WebSocket ID: {self.conn_id} - Sweeping Windows Chrome workers for profile: {self._owned_user_data_dir}")
+                
+                # Query Task Manager for chrome instances matching our temporary profile directory string
+                # This ensures we ONLY kill Chrome windows belonging to this specific check session
+                user_dir_escaped = self._owned_user_data_dir.replace("\\", "\\\\")
+                cmd = f'wmic process where "name=\'chrome.exe\' and commandline like \'%%{user_dir_escaped}%%\'" call terminate'
+                subprocess.run(["cmd", "/c", cmd], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            except Exception as e:
+                logger.trace(f"Windows process sweep warning: {e}")
+                
+        # STANDARD LINUX CONTAINER TREE CLEANUP
         try:
             parent = psutil.Process(self.proc.pid)
             procs = [parent] + parent.children(recursive=True)
-            if len(procs) > 1:
+            if len(procs) > 1 and sys.platform != "win32":
                 logger.debug(f"WebSocket ID: {self.conn_id} - Killing {len(procs)} Chrome processes")
             for proc in procs:
                 try:
