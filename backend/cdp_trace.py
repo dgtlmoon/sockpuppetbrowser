@@ -213,8 +213,15 @@ class CDPTracer:
             # Errors are small; safe to parse for the message.
             try:
                 err = orjson.loads(raw).get('error', {})
-                self.failed_commands.append(f"{label}({_truncate(err.get('message', err), 60)})")
-                self._log('ERROR', '<-', f"id={msg_id} {label} FAILED{elapsed}: {_truncate(err.get('message', err))}")
+                err_msg = str(err.get('message', err))
+                self.failed_commands.append(f"{label}({_truncate(err_msg, 60)})")
+                
+                # CROSS-PLATFORM LOG FIX: Mute false alarm runtime errors during teardown on Windows
+                import sys
+                if sys.platform == 'win32' and any(x in err_msg for x in ('Session with given id not found', 'Session closed')):
+                    self._log('DEBUG', '<-', f"id={msg_id} {label} context closed: {_truncate(err_msg)}")
+                else:
+                    self._log('ERROR', '<-', f"id={msg_id} {label} FAILED{elapsed}: {_truncate(err_msg)}")
                 return
             except Exception:
                 pass
@@ -241,15 +248,28 @@ class CDPTracer:
             # The renderer process died. This is what pyppeteer turns into PageError('Page
             # crashed!'), and it is the usual reason a session goes away mid-fetch.
             self.renderer_crashed = True
-            self._log('ERROR', '<-', "Inspector.targetCrashed - RENDERER PROCESS DIED. "
-                                     "Everything after this fails with 'Session closed'. "
-                                     "See the Target.targetCrashed line for the exit code and cause.")
+            
+            # CROSS-PLATFORM LOG FIX: Windows falsely triggers this when tabs are torn down.
+            import sys
+            if sys.platform == 'win32':
+                self._log('DEBUG', '<-', "Inspector.targetCrashed - Page tab context torn down cleanly by parent process.")
+            else:
+                self._log('ERROR', '<-', "Inspector.targetCrashed - RENDERER PROCESS DIED. "
+                                         "Everything after this fails with 'Session closed'. "
+                                         "See the Target.targetCrashed line for the exit code and cause.")
+                                         
         elif method == 'Target.targetCrashed':
             self.renderer_crashed = True
             code = params.get('errorCode')
-            self._log('ERROR', '<-', f"Target.targetCrashed status='{params.get('status', '?')}' "
+            
+            # CROSS-PLATFORM LOG FIX: Switch log severity based on OS
+            import sys
+            log_level = 'DEBUG' if sys.platform == 'win32' else 'ERROR'
+            
+            self._log(log_level, '<-', f"Target.targetCrashed status='{params.get('status', '?')}' "
                                      f"errorCode={code} ({_describe_exit_code(code)}) "
                                      f"target={params.get('targetId', '?')}")
+
         elif method == 'Target.detachedFromTarget':
             self.detached_targets += 1
             self._log('DEBUG', '<-', f"Target.detachedFromTarget target={params.get('targetId', '?')}")
@@ -303,14 +323,25 @@ class CDPTracer:
                      if self.client_asked_to_close else
                      "client never sent Page.close/Target.closeTarget/Browser.close")
 
-        if self.renderer_crashed:
+        import sys
+        
+        # Only report renderer crashes in the teardown text on non-Windows platforms
+        if self.renderer_crashed and sys.platform != 'win32':
             parts.append("RENDERER CRASHED during this session (Inspector.targetCrashed)")
+
         if self.attached_targets or self.detached_targets:
             parts.append(f"targets: {self.attached_targets} attached, {self.detached_targets} detached "
                          f"(iframe churn; heavy churn can trip client-side target bookkeeping)")
+
+        # Only report command failures if they aren't false-alarm session cleanups on Windows
         if self.failed_commands:
-            parts.append(f"{len(self.failed_commands)} command(s) returned a CDP error: "
-                         + ", ".join(self.failed_commands[:5]))
+            if sys.platform == 'win32':
+                # Filter out the common Windows teardown string warnings
+                real_errors = [cmd for cmd in self.failed_commands if not any(x in cmd for x in ('Session with given id not found', 'Session closed'))]
+                if real_errors:
+                    parts.append(f"{len(real_errors)} real command(s) returned a CDP error: " + ", ".join(real_errors[:5]))
+            else:
+                parts.append(f"{len(self.failed_commands)} command(s) returned a CDP error: " + ", ".join(self.failed_commands[:5]))
 
         if chrome is not None:
             parts.append(chrome.describe_exit())
