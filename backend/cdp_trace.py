@@ -15,11 +15,11 @@ inspected; command responses are identified purely from the "id" at the head and
 against the in-flight table, so a 10MB screenshot response costs one regex over 200 bytes.
 """
 
+import json
 import re
 import signal
 import time
 
-import orjson
 from loguru import logger
 
 # CDP always serialises "id" first in a command response.
@@ -150,7 +150,7 @@ class CDPTracer:
                     self._log('DEBUG', '->', f"{method} ({len(raw)} bytes)")
                 return
 
-            msg = orjson.loads(raw)
+            msg = json.loads(raw)
             method = msg.get('method')
             msg_id = msg.get('id')
             if method is None:
@@ -212,7 +212,7 @@ class CDPTracer:
         if b'"error"' in head:
             # Errors are small; safe to parse for the message.
             try:
-                err = orjson.loads(raw).get('error', {})
+                err = json.loads(raw).get('error', {})
                 self.failed_commands.append(f"{label}({_truncate(err.get('message', err), 60)})")
                 self._log('ERROR', '<-', f"id={msg_id} {label} FAILED{elapsed}: {_truncate(err.get('message', err))}")
                 return
@@ -227,7 +227,7 @@ class CDPTracer:
 
     def _on_event(self, method, raw):
         try:
-            params = orjson.loads(raw).get('params') or {}
+            params = json.loads(raw).get('params') or {}
         except Exception:
             params = {}
 

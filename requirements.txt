@@ -1,6 +1,5 @@
 aiohttp~=3.9
 loguru~=0.7
-orjson~=3.10
 psutil~=5.9
 # Pinned: the code uses the legacy websockets API (WebSocketServerProtocol, two-arg handler).
 # websockets 14+ changes the handler signature, so an unpinned rebuild would break silently.
