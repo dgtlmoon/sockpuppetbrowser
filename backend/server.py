@@ -29,7 +29,8 @@ import websockets
 from loguru import logger
 
 from cdp_trace import CDPTracer
-from chrome import ChromeInstance, ChromeStartupError, parse_query_args, sweep_orphans
+from chrome import (DEFAULT_CHROME_BIN, ChromeInstance, ChromeStartupError,
+                    parse_query_args, sweep_orphans)
 from http_server import start_http_server
 
 stats = {
@@ -353,7 +354,7 @@ async def main(args):
                                 ping_interval=WS_PING_INTERVAL,
                                 ping_timeout=WS_PING_TIMEOUT,
                                 close_timeout=WS_CLOSE_TIMEOUT):
-        chrome_path = os.getenv("CHROME_BIN", "/usr/bin/google-chrome")
+        chrome_path = os.getenv("CHROME_BIN", DEFAULT_CHROME_BIN)
         logger.success(f"Starting Chrome proxy, Listening on ws://{args.host}:{args.port} -> {chrome_path}")
         poll = asyncio.create_task(stats_thread_func())
         try:

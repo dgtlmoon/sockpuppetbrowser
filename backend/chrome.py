@@ -19,6 +19,7 @@ import re
 import shutil
 import signal
 import socket
+import sys
 import tempfile
 import time
 from asyncio.subprocess import DEVNULL, PIPE
@@ -40,8 +41,19 @@ X11_SOCKET = '/tmp/.X11-unix/X{display}'
 
 CHROME_START_TIMEOUT = float(os.getenv('CHROME_START_TIMEOUT', 25))
 
-# Where the per-connection scratch dirs go. In the docker image this is usually a tmpfs/ramdisk.
-TEMP_ROOT = os.getenv('SOCKPUPPET_TEMP_ROOT', '/tmp')
+# Everything below assumes the container, which is where this normally runs. Running the proxy
+# straight on Windows works, but the POSIX-only parts of teardown are skipped there - see
+# _graceful_stop() and sweep_orphan_x_displays().
+WINDOWS = sys.platform == 'win32'
+
+# Chrome's usual location. The container sets CHROME_BIN explicitly; these are the fallbacks
+# for running the proxy directly on a host.
+DEFAULT_CHROME_BIN = (r'C:\Program Files\Google\Chrome\Application\chrome.exe' if WINDOWS
+                      else '/usr/bin/google-chrome')
+
+# Where the per-connection scratch dirs go. In the docker image this is usually a tmpfs/ramdisk;
+# off-container, whatever the platform calls its temp dir.
+TEMP_ROOT = os.getenv('SOCKPUPPET_TEMP_ROOT', tempfile.gettempdir() if WINDOWS else '/tmp')
 
 # Prefix of the one dir we create per browser. Both the profile and Chrome's own TMPDIR live
 # inside it, so a single rmtree at teardown gets everything Chrome put in temp.
@@ -122,7 +134,7 @@ def parse_query_args(query):
 
 def build_chrome_args(chrome_flags, headful=False):
     """Build the Chrome command line. Returns (argv, owned_temp_dir)."""
-    chrome_location = os.getenv("CHROME_BIN", "/usr/bin/google-chrome")
+    chrome_location = os.getenv("CHROME_BIN", DEFAULT_CHROME_BIN)
 
     # Needs chrome 121+ or so, Defaults taken from a live Puppeteer
     # https://github.com/GoogleChrome/chrome-launcher/blob/main/docs/chrome-flags-for-tools.md
@@ -257,6 +269,9 @@ def _unix_socket_state(path, timeout=0.25):
     works for an X display: a running server accepts the connection, a dead one's leftover
     socket refuses it.
     """
+    if not hasattr(socket, 'AF_UNIX'):
+        return 'unknown'      # Windows: nothing to test, so nothing gets swept either
+
     sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
     try:
         sock.settimeout(timeout)
@@ -323,6 +338,9 @@ def sweep_orphan_x_displays(min_age=SWEEP_MIN_AGE):
     here comes from a proxy that was killed before it could tear a headful browser down. The
     lock alone is enough to make `xvfb-run -a` skip that display number for good.
     """
+    if WINDOWS:
+        return 0              # no X server, no display locks
+
     now = time.time()
     released = 0
 
@@ -727,6 +745,12 @@ class ChromeInstance:
         """
         if CHROME_SHUTDOWN_GRACE <= 0 or self.proc.returncode is not None:
             return
+        if not hasattr(signal, 'SIGHUP'):
+            # Windows has no SIGHUP, and TerminateProcess gives Chrome no chance to flush.
+            # Teardown falls through to _kill_tree(), which psutil handles cross-platform.
+            logger.trace(f"WebSocket ID: {self.conn_id} - No SIGHUP on this platform, "
+                         f"skipping the graceful shutdown")
+            return
 
         browser = self._browser_process()
         if browser is None:
@@ -746,11 +770,15 @@ class ChromeInstance:
         """SIGKILL the browser and every renderer/GPU child it spawned."""
         try:
             parent = psutil.Process(self.proc.pid)
-            procs = [parent] + parent.children(recursive=True)
-            self._note_xvfb_displays(procs)
-            if len(procs) > 1:
-                logger.debug(f"WebSocket ID: {self.conn_id} - Killing {len(procs)} Chrome processes")
-            for proc in procs:
+            children = parent.children(recursive=True)
+            self._note_xvfb_displays([parent] + children)
+            if children:
+                logger.debug(f"WebSocket ID: {self.conn_id} - Killing {len(children) + 1} Chrome processes")
+            # Children first, then the browser: killing a process does not kill its children on
+            # any platform (Windows especially - there is no process group to signal), and
+            # taking the browser down first can leave it spawning a crash handler for whichever
+            # renderer went away underneath it.
+            for proc in children + [parent]:
                 try:
                     proc.kill()
                 except (psutil.NoSuchProcess, psutil.AccessDenied):
