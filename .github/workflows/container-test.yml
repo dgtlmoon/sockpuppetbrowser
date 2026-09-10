@@ -1,0 +1,81 @@
+name: Container test
+
+# Builds the image and drives the proxy inside it with a real CDP client, so a change that
+# breaks page fetching or leaves temp files behind fails here rather than in production.
+on:
+  push:
+    branches: [master]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  container-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+        with:
+          install: true
+
+      # amd64 only and load=true: the tests need the image in the runner's local docker, and
+      # nothing here is architecture-specific. The multi-arch build stays in container-publish.
+      - name: Build the container
+        uses: docker/build-push-action@v6
+        with:
+          context: ./
+          file: ./Dockerfile
+          push: false
+          load: true
+          tags: sockpuppetbrowser:test
+          platforms: linux/amd64
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Start the container
+        run: |
+          docker run -d --name sockpuppet-test --init \
+            --cap-add=SYS_ADMIN \
+            --security-opt seccomp=$(pwd)/chrome.json \
+            -p 127.0.0.1:3000:3000 \
+            -p 127.0.0.1:8080:8080 \
+            -e LOG_LEVEL=DEBUG \
+            -e SCREEN_WIDTH=1920 \
+            -e SCREEN_HEIGHT=1024 \
+            sockpuppetbrowser:test
+
+      - name: Wait for the proxy to accept connections
+        run: |
+          for i in $(seq 1 30); do
+            if curl -sf http://127.0.0.1:8080/stats; then echo; exit 0; fi
+            sleep 1
+          done
+          echo "::error::the proxy never came up"
+          docker logs sockpuppet-test
+          exit 1
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      # The test client only, deliberately not requirements.txt: pyppeteer wants websockets
+      # 10.x while the proxy is pinned to 11.x, and the proxy runs in the container anyway.
+      - name: Install the pyppeteer test client
+        run: pip3 install -r pyppeteer-tests/requirements.txt
+
+      - name: Load a page through the proxy
+        working-directory: pyppeteer-tests
+        run: python3 test_fetch_page.py
+
+      - name: Chrome leaves no temp files behind
+        working-directory: pyppeteer-tests
+        run: python3 test_temp_dir_cleanup.py
+
+      - name: Container logs
+        if: always()
+        run: docker logs sockpuppet-test
+
+      - name: Stop the container
+        if: always()
+        run: docker rm -f sockpuppet-test

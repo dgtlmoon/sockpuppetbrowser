@@ -13,9 +13,11 @@ default-executor threads per browser for the lifetime of the connection and exha
 """
 
 import asyncio
+import glob
 import os
 import re
 import shutil
+import socket
 import tempfile
 import time
 from asyncio.subprocess import DEVNULL, PIPE
@@ -28,7 +30,33 @@ from loguru import logger
 # "DevTools listening on ws://127.0.0.1:36743/devtools/browser/9cc0662e-..."
 DEVTOOLS_RE = re.compile(r'DevTools listening on (ws://\S+)')
 
+# The display argument in an Xvfb command line, e.g. "Xvfb :100 -screen 0 1920x1080x24 ...".
+XVFB_DISPLAY_RE = re.compile(r'^:(\d+)$')
+
+# X11 hardcodes both of these, TMPDIR has no say in it.
+X11_LOCK = '/tmp/.X{display}-lock'
+X11_SOCKET = '/tmp/.X11-unix/X{display}'
+
 CHROME_START_TIMEOUT = float(os.getenv('CHROME_START_TIMEOUT', 25))
+
+# Where the per-connection scratch dirs go. In the docker image this is usually a tmpfs/ramdisk.
+TEMP_ROOT = os.getenv('SOCKPUPPET_TEMP_ROOT', '/tmp')
+
+# Prefix of the one dir we create per browser. Both the profile and Chrome's own TMPDIR live
+# inside it, so a single rmtree at teardown gets everything Chrome put in temp.
+TEMP_DIR_PREFIX = 'chrome-puppeteer-proxy'
+
+# Chrome's ProcessSingleton names its socket dir "<product>.XXXXXX" (base::ScopedTempDir +
+# base::TempFileName); the product part depends on the build and the leading dot on the
+# version. Only used by the orphan sweep - browsers we launch get a private TMPDIR instead.
+SINGLETON_DIR_GLOBS = (
+    'org.chromium.Chromium.*', '.org.chromium.Chromium.*',
+    'com.google.Chrome.*', '.com.google.Chrome.*',
+)
+
+# Don't sweep anything younger than this: a browser needs a moment to create its socket, and a
+# dir with no socket in it yet must not be mistaken for an orphan.
+SWEEP_MIN_AGE = float(os.getenv('SOCKPUPPET_SWEEP_MIN_AGE', 300))
 
 # How often to check whether Chrome has died. Only used for logging, so coarse is fine.
 EXIT_POLL_INTERVAL = 0.25
@@ -45,6 +73,7 @@ BENIGN_STDERR = (
     "Floating point exception",   # from the GPU probe on headless hosts, harmless
     "vkCreateInstance",           # no Vulkan driver in the container
     "Failed to load libEGL",
+    "Cloud management controller",  # CBCM not enabled, logged at ERROR on every startup
 )
 
 
@@ -76,7 +105,7 @@ def parse_query_args(query):
 
 
 def build_chrome_args(chrome_flags, headful=False):
-    """Build the Chrome command line. Returns (argv, user_data_dir_we_created_or_None)."""
+    """Build the Chrome command line. Returns (argv, owned_temp_dir)."""
     chrome_location = os.getenv("CHROME_BIN", "/usr/bin/google-chrome")
 
     # Needs chrome 121+ or so, Defaults taken from a live Puppeteer
@@ -157,13 +186,23 @@ def build_chrome_args(chrome_flags, headful=False):
         else:
             logger.warning("No --window-size in query, and no SCREEN_HEIGHT + SCREEN_WIDTH env vars found :-(")
 
-    owned_user_data_dir = None
-    if '--user-data-dir' not in supplied:
-        owned_user_data_dir = tempfile.mkdtemp(prefix="chrome-puppeteer-proxy", dir="/tmp")
-        chrome_run.append(f"--user-data-dir={owned_user_data_dir}")
-        logger.debug(f"No user-data-dir in query, using {owned_user_data_dir}")
+    # One scratch dir per browser. It doubles as Chrome's TMPDIR (see ChromeInstance.start),
+    # which is what keeps /tmp clean: Chrome's ProcessSingleton creates
+    # <TMPDIR>/org.chromium.Chromium.XXXXXX to hold the SingletonSocket that the profile
+    # symlinks to, and only removes it on a graceful shutdown. We SIGKILL the tree at teardown,
+    # so that dir used to leak - one per connection, forever. Anything Chrome writes to temp
+    # now lands in here (including the shared-memory files --disable-dev-shm-usage sends to
+    # temp) and goes away with the rmtree in _cleanup_temp_dir().
+    owned_temp_dir = tempfile.mkdtemp(prefix=TEMP_DIR_PREFIX, dir=TEMP_ROOT)
 
-    return chrome_run, owned_user_data_dir
+    if '--user-data-dir' not in supplied:
+        # Kept short: the singleton socket path has to fit in sockaddr_un (108 bytes).
+        user_data_dir = os.path.join(owned_temp_dir, 'profile')
+        os.mkdir(user_data_dir)
+        chrome_run.append(f"--user-data-dir={user_data_dir}")
+        logger.debug(f"No user-data-dir in query, using {user_data_dir}")
+
+    return chrome_run, owned_temp_dir
 
 
 def _user_data_dir_of(argv):
@@ -171,6 +210,66 @@ def _user_data_dir_of(argv):
         if a.startswith('--user-data-dir='):
             return a.split('=', 1)[1]
     return None
+
+
+def _singleton_socket_is_live(path):
+    """Is a Chrome still listening on the SingletonSocket inside this dir?
+
+    Same test Chrome uses on a profile it finds already locked: a running browser accepts the
+    connection, a dead one's socket is refused. The socket is at <dir>/SingletonSocket for a
+    bare singleton dir, or one level down for a scratch dir of ours (which is the browser's
+    TMPDIR, so the singleton dir sits inside it). Anything we cannot classify counts as live,
+    so a sweep never races a browser that is still working.
+    """
+    sockets = glob.glob(os.path.join(path, 'SingletonSocket'))
+    sockets += glob.glob(os.path.join(path, '*', 'SingletonSocket'))
+    for sock_path in sockets:
+        s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        try:
+            s.settimeout(0.25)
+            s.connect(sock_path)
+            return True
+        except (ConnectionRefusedError, FileNotFoundError):
+            continue
+        except OSError:
+            return True  # permissions, ENOTSOCK, timeout - don't touch what we can't judge
+        finally:
+            s.close()
+    return False
+
+
+def sweep_orphan_temp_dirs(exclude=(), min_age=SWEEP_MIN_AGE, temp_root=TEMP_ROOT):
+    """Delete Chrome temp dirs whose browser is gone. Returns the number removed.
+
+    Two kinds get left behind:
+      * scratch dirs of ours (TEMP_DIR_PREFIX*) from a proxy that was killed before teardown,
+      * bare singleton dirs (org.chromium.Chromium.*) from a Chrome that had no private TMPDIR,
+        i.e. one started before this cleanup existed, or one we did not launch.
+
+    Only dirs that are older than min_age, not in `exclude`, and have no browser listening on
+    their SingletonSocket are removed.
+    """
+    now = time.time()
+    exclude = {os.path.realpath(p) for p in exclude if p}
+    removed = 0
+
+    for pattern in (TEMP_DIR_PREFIX + '*',) + SINGLETON_DIR_GLOBS:
+        for path in glob.glob(os.path.join(temp_root, pattern)):
+            if not os.path.isdir(path) or os.path.realpath(path) in exclude:
+                continue
+            try:
+                if now - os.stat(path).st_mtime < min_age:
+                    continue
+            except OSError:
+                continue
+            if _singleton_socket_is_live(path):
+                continue
+            shutil.rmtree(path, ignore_errors=True)
+            removed += 1
+
+    if removed:
+        logger.info(f"Swept {removed} orphaned Chrome temp dir(s) from {temp_root}")
+    return removed
 
 
 class ChromeStartupError(RuntimeError):
@@ -197,7 +296,8 @@ class ChromeInstance:
         self.exited_at = None
 
         self._argv = None
-        self._owned_user_data_dir = None
+        self._owned_temp_dir = None
+        self._xvfb_displays = set()
         self._killed_by_us = False
         self._exit_reported = False
         self._tasks = []
@@ -206,6 +306,11 @@ class ChromeInstance:
     @property
     def pid(self):
         return self.proc.pid if self.proc else None
+
+    @property
+    def temp_dir(self):
+        """The scratch dir this browser owns, so a sweep can skip it while we are running."""
+        return self._owned_temp_dir
 
     async def __aenter__(self):
         await self.start()
@@ -217,7 +322,7 @@ class ChromeInstance:
 
     async def start(self):
         loop = asyncio.get_running_loop()
-        self._argv, self._owned_user_data_dir = await loop.run_in_executor(
+        self._argv, self._owned_temp_dir = await loop.run_in_executor(
             None, lambda: build_chrome_args(self.chrome_flags, self.headful)
         )
 
@@ -228,19 +333,23 @@ class ChromeInstance:
 
         logger.debug(f"WebSocket ID: {self.conn_id} - launching: {' '.join(argv)}")
 
+        # Point Chrome's temp dir at our scratch dir so the socket dir it never cleans up after
+        # a kill is somewhere we delete wholesale. Also covers xvfb-run's Xauthority file.
+        env = dict(os.environ, TMPDIR=self._owned_temp_dir)
+
         try:
             # stdout to /dev/null: Chrome puts everything we care about on stderr, and an
             # undrained pipe blocks the browser once the 64KB kernel buffer fills.
             self.proc = await asyncio.create_subprocess_exec(
-                *argv, stdout=DEVNULL, stderr=PIPE
+                *argv, stdout=DEVNULL, stderr=PIPE, env=env
             )
         except FileNotFoundError:
-            self._cleanup_profile()
+            self._cleanup_temp_dir()
             raise ChromeStartupError(
                 f"Chrome binary not found at {argv[0]}, aborting!"
             )
         except Exception as e:
-            self._cleanup_profile()
+            self._cleanup_temp_dir()
             raise ChromeStartupError(f"Chrome startup failed: {e}")
 
         try:
@@ -401,7 +510,7 @@ class ChromeInstance:
 
     async def aclose(self):
         if self.proc is None:
-            self._cleanup_profile()
+            self._cleanup_temp_dir()
             return
 
         self._killed_by_us = True
@@ -424,13 +533,52 @@ class ChromeInstance:
         except Exception as e:
             logger.warning(f"WebSocket ID: {self.conn_id} - Error reaping Chrome: {e}")
 
-        self._cleanup_profile()
+        self._cleanup_temp_dir()
+        self._cleanup_xvfb()
+
+    def _note_xvfb_displays(self, procs):
+        """Remember which X display our xvfb-run took, before we kill everything.
+
+        Xvfb removes /tmp/.X<n>-lock and /tmp/.X11-unix/X<n> when it shuts down on its own,
+        and xvfb-run's shell trap tidies up after it - neither of which survives a SIGKILL.
+        Unremoved, the locks build up one per headful connection, and `xvfb-run -a` has to
+        climb past every stale one to find a free display number.
+        """
+        for proc in procs:
+            try:
+                if proc.name() != 'Xvfb':
+                    continue
+                for arg in proc.cmdline()[1:]:
+                    match = XVFB_DISPLAY_RE.match(arg)
+                    if match:
+                        self._xvfb_displays.add(match.group(1))
+                        break
+            except (psutil.NoSuchProcess, psutil.AccessDenied):
+                continue
+
+    def _cleanup_xvfb(self):
+        """Drop the X lock and socket that Xvfb never got the chance to remove.
+
+        Safe to unlink: while our Xvfb held the display nobody else could claim that number,
+        and once it is dead the leftover lock only stops the number being reused.
+        """
+        for display in self._xvfb_displays:
+            for path in (X11_LOCK.format(display=display), X11_SOCKET.format(display=display)):
+                try:
+                    os.unlink(path)
+                except OSError:
+                    pass  # never existed, or not ours to remove
+        if self._xvfb_displays:
+            logger.debug(f"WebSocket ID: {self.conn_id} - Released X display(s) "
+                         f"{', '.join(sorted(self._xvfb_displays))}")
+        self._xvfb_displays = set()
 
     def _kill_tree(self):
         """SIGKILL the browser and every renderer/GPU child it spawned."""
         try:
             parent = psutil.Process(self.proc.pid)
             procs = [parent] + parent.children(recursive=True)
+            self._note_xvfb_displays(procs)
             if len(procs) > 1:
                 logger.debug(f"WebSocket ID: {self.conn_id} - Killing {len(procs)} Chrome processes")
             for proc in procs:
@@ -444,9 +592,9 @@ class ChromeInstance:
             except (OSError, ProcessLookupError):
                 pass  # Already gone
 
-    def _cleanup_profile(self):
-        """Remove the temp profile, but only if we were the ones who made it."""
-        if not self._owned_user_data_dir:
+    def _cleanup_temp_dir(self):
+        """Remove our scratch dir: profile, Chrome's singleton socket dir, temp shmem files."""
+        if not self._owned_temp_dir:
             return
-        shutil.rmtree(self._owned_user_data_dir, ignore_errors=True)
-        self._owned_user_data_dir = None
+        shutil.rmtree(self._owned_temp_dir, ignore_errors=True)
+        self._owned_temp_dir = None
