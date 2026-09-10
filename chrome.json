@@ -1,5 +1,6 @@
 {
   "defaultAction": "SCMP_ACT_ERRNO",
+  "defaultErrnoRet": 38,
   "syscalls": [
     {
       "action": "SCMP_ACT_ALLOW",

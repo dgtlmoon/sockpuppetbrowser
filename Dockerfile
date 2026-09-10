@@ -7,7 +7,9 @@ LABEL org.opencontainers.image.source="https://github.com/dgtlmoon/sockpuppetbro
 ENV PYTHONUNBUFFERED=1
 ENV LOG_LEVEL=DEBUG
 ARG TARGETARCH
-ARG CHROME_VERSION=151.0.7922.173-1
+# A deb version like 151.0.7922.173-1, or "current" for whatever Chrome Stable is today.
+# Google's deb pool only keeps recent releases, so pinning an old version will 404.
+ARG CHROME_VERSION=current
 RUN set -eux; \
 	apt-get update; \
 	apt-get install -y --no-install-recommends \
@@ -28,7 +30,11 @@ RUN set -eux; \
 		amd64|arm64) ;; \
 		*) echo "Unsupported architecture: $chrome_arch" >&2; exit 1 ;; \
 	esac; \
-	curl -fsSL "https://dl.google.com/linux/chrome/deb/pool/main/g/google-chrome-stable/google-chrome-stable_${CHROME_VERSION}_${chrome_arch}.deb" -o /tmp/google-chrome.deb; \
+	case "$CHROME_VERSION" in \
+		current|latest) chrome_url="https://dl.google.com/linux/direct/google-chrome-stable_current_${chrome_arch}.deb" ;; \
+		*) chrome_url="https://dl.google.com/linux/chrome/deb/pool/main/g/google-chrome-stable/google-chrome-stable_${CHROME_VERSION}_${chrome_arch}.deb" ;; \
+	esac; \
+	curl -fsSL "$chrome_url" -o /tmp/google-chrome.deb; \
 	apt-get install -y --no-install-recommends /tmp/google-chrome.deb; \
 	rm -f /tmp/google-chrome.deb; \
 	apt-get purge -y --auto-remove curl; \
