@@ -115,6 +115,14 @@ jobs:
           echo "--- everything directly in /tmp:"
           grep -E '^[ACD] /tmp/[^/]+$' pyppeteer-tests/artifacts/docker-diff.txt || echo "(nothing)"
 
+      - name: A profile locked by a dead container is still usable
+        working-directory: pyppeteer-tests
+        run: python3 test_stale_profile_lock.py
+
+      - name: Nothing Chrome started outlives the connection
+        working-directory: pyppeteer-tests
+        run: python3 test_orphan_processes.py
+
       # Starts its own container without --init, so Docker's reaper cannot hide a missing
       # one inside the image. Uses its own ports, so it does not disturb the main container.
       - name: Chrome's orphans are reaped without --init
