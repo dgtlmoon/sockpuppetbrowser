@@ -217,6 +217,28 @@ def _user_data_dir_of(argv):
     return None
 
 
+def _discard_stale_devtools_port(user_data_dir):
+    """Delete a DevToolsActivePort left in the profile by an earlier browser.
+
+    Chrome removes this file itself on a clean exit, but we SIGKILL, so a profile the client
+    reuses across connections still holds the port and browser id of the browser we killed.
+    _devtools_url_from_profile() would then hand the client an endpoint for a browser that no
+    longer exists - and because these are ephemeral ports, one that may since have been handed
+    to a different browser of ours, quietly wiring two connections to the same Chrome.
+
+    Chrome does not read the file, only write it, so removing it before launch costs nothing.
+    """
+    if not user_data_dir:
+        return
+    try:
+        os.unlink(os.path.join(user_data_dir, 'DevToolsActivePort'))
+    except FileNotFoundError:
+        pass
+    except OSError as e:
+        # A read-only or root-owned profile dir; the mtime check below is the backstop.
+        logger.debug(f"Could not remove stale DevToolsActivePort in {user_data_dir}: {e}")
+
+
 def _unix_socket_state(path, timeout=0.25):
     """'live', 'dead' or 'unknown' for a unix socket - is anything listening on it?
 
@@ -356,6 +378,7 @@ class ChromeInstance:
         self._argv = None
         self._owned_temp_dir = None
         self._xvfb_displays = set()
+        self._launched_at = None
         self._killed_by_us = False
         self._exit_reported = False
         self._tasks = []
@@ -394,6 +417,9 @@ class ChromeInstance:
         # Point Chrome's temp dir at our scratch dir so the socket dir it never cleans up after
         # a kill is somewhere we delete wholesale. Also covers xvfb-run's Xauthority file.
         env = dict(os.environ, TMPDIR=self._owned_temp_dir)
+
+        _discard_stale_devtools_port(_user_data_dir_of(self._argv))
+        self._launched_at = time.time()
 
         try:
             # stdout to /dev/null: Chrome puts everything we care about on stderr, and an
@@ -457,12 +483,27 @@ class ChromeInstance:
             logger.debug(f"WebSocket ID: {self.conn_id} Chrome stderr PID {self.pid}: {text}")
 
     def _devtools_url_from_profile(self):
-        """Fallback: <user-data-dir>/DevToolsActivePort holds "<port>\\n<browser path>"."""
+        """Fallback: <user-data-dir>/DevToolsActivePort holds "<port>\\n<browser path>".
+
+        Only trusted if the file was written by *this* browser. start() deletes any inherited
+        one before launching; this second check covers the case where that delete failed, and
+        refusing a good file only costs us the fallback, while trusting a stale one can point
+        a client at somebody else's browser.
+        """
         user_data_dir = _user_data_dir_of(self._argv)
         if not user_data_dir:
             return None
+        port_file = os.path.join(user_data_dir, 'DevToolsActivePort')
         try:
-            with open(os.path.join(user_data_dir, 'DevToolsActivePort')) as f:
+            # Floored to the second: some filesystems only store mtime that coarsely, and
+            # rounding down our launch time is the safe direction to be wrong in.
+            if self._launched_at and os.stat(port_file).st_mtime < int(self._launched_at):
+                logger.warning(
+                    f"WebSocket ID: {self.conn_id} - Ignoring DevToolsActivePort in "
+                    f"{user_data_dir}: written before this browser started, so it belongs to "
+                    f"an older one")
+                return None
+            with open(port_file) as f:
                 port = f.readline().strip()
                 path = f.readline().strip()
             if port and path:
