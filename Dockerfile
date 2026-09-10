@@ -23,6 +23,7 @@ RUN set -eux; \
 		python3-dev \
 		python3-pip \
 		python3-venv \
+		tini \
 		xauth \
 		xvfb; \
 	chrome_arch="${TARGETARCH:-$(dpkg --print-architecture)}"; \

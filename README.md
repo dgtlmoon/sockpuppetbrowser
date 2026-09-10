@@ -49,7 +49,7 @@ container directly.
 
 ```bash
 wget https://raw.githubusercontent.com/dgtlmoon/sockpuppetbrowser/refs/heads/master/chrome.json
-docker run --rm --security-opt seccomp=$(pwd)/chrome.json -p 127.0.0.1:3000:3000 dgtlmoon/sockpuppetbrowser
+docker run --rm --init --security-opt seccomp=$(pwd)/chrome.json -p 127.0.0.1:3000:3000 dgtlmoon/sockpuppetbrowser
 ```
 
 `seccomp` security setting is _highly_ recommended https://github.com/Zenika/alpine-chrome?tab=readme-ov-file#-the-best-with-seccomp
@@ -65,7 +65,7 @@ ws://127.0.0.1:3000/?headful=true
 
 Or via environment variable:
 ```bash
-docker run --rm -e CHROME_HEADFUL=true --security-opt seccomp=$(pwd)/chrome.json -p 127.0.0.1:3000:3000 dgtlmoon/sockpuppetbrowser
+docker run --rm --init -e CHROME_HEADFUL=true --security-opt seccomp=$(pwd)/chrome.json -p 127.0.0.1:3000:3000 dgtlmoon/sockpuppetbrowser
 ```
 
 **Headful mode features:**
@@ -206,7 +206,7 @@ Then you can select the viewport size you like in the browser for checking the w
 You can run this container with a different default size.
 
 ```bash
-docker run -e SCREEN_WIDTH=1920 -e SCREEN_HEIGHT=1080 --security-opt seccomp=$(pwd)/chrome.json -p 127.0.0.1:3000:3000 dgtlmoon/sockpuppetbrowser
+docker run --init -e SCREEN_WIDTH=1920 -e SCREEN_HEIGHT=1080 --security-opt seccomp=$(pwd)/chrome.json -p 127.0.0.1:3000:3000 dgtlmoon/sockpuppetbrowser
 ```
 
 If neither is specified, Chrome will use its default viewport size.

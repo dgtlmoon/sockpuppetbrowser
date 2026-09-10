@@ -2,6 +2,9 @@ version: "3"
 services:
   app:
     build: .
+    # Reap Chrome's orphaned renderers/crashpad/Xvfb processes; the image also runs tini
+    # internally, this covers anyone overriding the entrypoint.
+    init: true
     cap_add:
       - SYS_ADMIN
     ports:
