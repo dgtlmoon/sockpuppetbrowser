@@ -15,7 +15,8 @@ deletes the lock, which in production shows up as a handful of watches that neve
 
 The proxy therefore clears those links before launching, but only when nothing is listening on
 the socket. The second half of this test is the one that matters for safety: a profile a live
-browser is genuinely using must still be protected.
+browser is genuinely using must still be protected - checked only on builds that take a lock at
+all, since Chromium 119's old --headless starts no ProcessSingleton and has no such protection.
 
 Needs docker: it plants a lock inside the container.
 """
@@ -75,9 +76,18 @@ async def main():
         page = await browser.newPage()
         await page.goto('about:blank', waitUntil='load')
 
-        c.ok(await try_fetch(**{'--user-data-dir': PROFILE}) is None, "a profile in use by a live browser is still refused to a second connection",
-             "the second connection succeeded - Chrome's own protection has been defeated and "
-             "two browsers are sharing one profile")
+        # Only builds that actually run a ProcessSingleton can refuse a second connection.
+        # Chromium 119's old --headless never starts one - no Singleton* links appear in the
+        # profile at all - so there is no protection there to respect or to break, and asking
+        # for a refusal would be asserting behaviour that browser does not have.
+        if 'SingletonSocket' in links_in(PROFILE):
+            c.ok(await try_fetch(**{'--user-data-dir': PROFILE}) is None,
+                 "a profile in use by a live browser is still refused to a second connection",
+                 "the second connection succeeded - Chrome's own protection has been defeated "
+                 "and two browsers are sharing one profile")
+        else:
+            print("    (this build holds no Singleton* lock while running, so it has no "
+                  "profile protection to test - old --headless starts no ProcessSingleton)")
     finally:
         await browser.disconnect()
     wait_for_idle()
