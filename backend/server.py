@@ -29,7 +29,7 @@ import websockets
 from loguru import logger
 
 from cdp_trace import CDPTracer
-from chrome import ChromeInstance, ChromeStartupError, parse_query_args
+from chrome import ChromeInstance, ChromeStartupError, parse_query_args, sweep_orphan_temp_dirs
 from http_server import start_http_server
 
 stats = {
@@ -56,6 +56,12 @@ QUEUE_TIMEOUT = int(os.getenv('CONNECTION_QUEUE_TIMEOUT', 120))
 WS_PING_INTERVAL = int(os.getenv('WS_PING_INTERVAL', 20))
 WS_PING_TIMEOUT = int(os.getenv('WS_PING_TIMEOUT', 20))
 
+# How long to wait for a client's closing handshake. websockets defaults to 10s, and spends it
+# twice (once waiting for the peer's close frame, once for the TCP close) - a long time to sit
+# on a connection that is already finished. pyppeteer's browser.close() drops its socket
+# without a close frame, so this is the normal path, not an edge case.
+WS_CLOSE_TIMEOUT = int(os.getenv('WS_CLOSE_TIMEOUT', 5))
+
 # Bounded so a slow reader applies TCP backpressure instead of buffering screenshots in RAM.
 WS_MAX_QUEUE = int(os.getenv('WS_MAX_QUEUE', 128))
 
@@ -76,7 +82,16 @@ live_chrome = set()
 async def close_socket(websocket):
     logger.debug(f"WebSocket: {websocket.id} Closing websocket to puppeteer")
     try:
-        await websocket.close()
+        # Hard bound on top of close_timeout: a peer that never answers must not keep the
+        # handler alive, so drop the connection on the floor instead of waiting for it.
+        await asyncio.wait_for(websocket.close(), timeout=WS_CLOSE_TIMEOUT * 2 + 1)
+    except asyncio.TimeoutError:
+        logger.debug(f"WebSocket: {websocket.id} - Client never finished the closing "
+                     f"handshake, aborting the connection")
+        try:
+            websocket.transport.abort()
+        except Exception:
+            pass
     except Exception as e:
         logger.error(f"WebSocket: {websocket.id} - While closing - error: {e}")
 
@@ -192,13 +207,18 @@ async def launchPuppeteerChromeProxy(websocket, path):
         if tracer.closed_first == 'chrome':
             await chrome.settle(timeout=1.0)
         tracer.log_teardown(chrome=chrome)
-        live_chrome.discard(chrome)
+        # aclose() first, then drop it: while it is still in live_chrome the temp-dir sweep
+        # knows to leave its scratch dir alone.
         await chrome.aclose()
-        await close_socket(websocket)
+        live_chrome.discard(chrome)
+        # Give the slot back now that the browser is gone. Closing the client socket can take
+        # seconds if the peer walked away without a close frame (pyppeteer's browser.close()
+        # does exactly that), and nothing about that wait needs to occupy a slot.
         connection_semaphore.release()
         stats['connection_count'] -= 1
         if tracer.saw_special_counter:
             stats['special_counter'] += 1
+        await close_socket(websocket)
         logger.debug(f"Websocket {websocket.id} - Connection ended, processed in {time.time() - now:.3f}s")
 
     logger.success(f"Websocket {websocket.id} - Connection done!")
@@ -277,6 +297,13 @@ async def stats_thread_func():
                 timeout=1.0,
             )
             logger.info(f"Process info: {child_count} child processes")
+
+            # Chrome only removes its own temp dirs on a graceful exit and we SIGKILL, so
+            # mop up anything a crashed proxy (or a Chrome we didn't launch) left behind.
+            # Scratch dirs of live browsers are excluded by path, everything else has to
+            # prove itself dead - see sweep_orphan_temp_dirs().
+            in_use = {c.temp_dir for c in live_chrome}
+            await loop.run_in_executor(None, lambda: sweep_orphan_temp_dirs(exclude=in_use))
         except asyncio.TimeoutError:
             logger.warning("Process count check failed: timeout")
         except Exception as e:
@@ -306,6 +333,10 @@ async def main(args):
         except NotImplementedError:
             pass  # Not available on all platforms
 
+    # Nothing of ours is running yet, so anything still lying around is an orphan.
+    await asyncio.get_running_loop().run_in_executor(
+        None, lambda: sweep_orphan_temp_dirs(min_age=0))
+
     await start_http_server(host=args.host, port=args.sport, stats=stats)
 
     # max_size=None to match the Chrome side; the 1MiB default silently killed connections
@@ -314,7 +345,8 @@ async def main(args):
                                 max_size=None,
                                 max_queue=WS_MAX_QUEUE,
                                 ping_interval=WS_PING_INTERVAL,
-                                ping_timeout=WS_PING_TIMEOUT):
+                                ping_timeout=WS_PING_TIMEOUT,
+                                close_timeout=WS_CLOSE_TIMEOUT):
         chrome_path = os.getenv("CHROME_BIN", "/usr/bin/google-chrome")
         logger.success(f"Starting Chrome proxy, Listening on ws://{args.host}:{args.port} -> {chrome_path}")
         poll = asyncio.create_task(stats_thread_func())
