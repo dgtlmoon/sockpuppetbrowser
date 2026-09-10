@@ -112,6 +112,7 @@ You can also add this to your fetch and access `'special_counter_len'` at the `/
 | `CHROME_BIN` | `/usr/bin/google-chrome` | Chrome binary. |
 | `CHROME_HEADFUL` | `false` | Run headful under `xvfb-run`. |
 | `CHROME_START_TIMEOUT` | `25` | Seconds to wait for Chrome to report its CDP endpoint. |
+| `CHROME_SHUTDOWN_GRACE` | `3` | Seconds to let Chrome exit on its own (SIGHUP) before SIGKILL, so it flushes cookies and Local Storage. `0` kills immediately. |
 | `SCREEN_WIDTH` / `SCREEN_HEIGHT` | unset | Fallback `--window-size` when the connection URL doesn't set one. |
 | `WS_PING_INTERVAL` | `20` | Websocket keepalive ping interval, seconds. |
 | `WS_PING_TIMEOUT` | `20` | Seconds to wait for a pong before dropping the connection. |
@@ -234,10 +235,20 @@ paths rather than one per watch. A profile serves **one connection at a time** -
 and the second Chrome exits with code 21 (`The profile appears to be in use...`) - so size that
 set to your concurrency.
 
-Keeping a logged-in session in a reused profile: Chrome batches cookie writes, so hold the
-connection open ~30s after logging in and finish with CDP `Browser.close`. `localStorage` needs
-only the `Browser.close`; dropping the websocket flushes neither, because the proxy SIGKILLs
-Chrome in that case.
+Sessions do survive a reused profile: on teardown the proxy SIGHUPs Chrome and gives it up to
+`CHROME_SHUTDOWN_GRACE` seconds to exit on its own, which is what makes it flush its cookie
+store and Local Storage. It normally takes ~0.2s. Without that Chrome gets SIGKILLed and
+anything written in the last 30 seconds is lost - Chrome batches cookie writes on a 30s timer,
+so a login done in a short session used to vanish silently. `sessionStorage` never carries
+over, by definition.
+
+> **@todo for changedetection.io:** reusing a profile dir now keeps a login, so this is no
+> longer a correctness problem - but at volume the cheaper option is not to use a profile dir
+> at all. Pull the cookies out over CDP with `Network.getAllCookies` at the end of a session,
+> keep them client-side, and re-inject with `Network.setCookies` on the next connection. No
+> `--user-data-dir` means no ~198 files per watch to clean up, no one-connection-at-a-time
+> limit on a shared profile, and the login survives even a hard kill of the container, where
+> the proxy never gets to shut Chrome down politely.
 
 ### Tuning
 
