@@ -17,6 +17,7 @@ import glob
 import os
 import re
 import shutil
+import signal
 import socket
 import tempfile
 import time
@@ -62,6 +63,16 @@ SWEEP_MIN_AGE = float(os.getenv('SOCKPUPPET_SWEEP_MIN_AGE', 300))
 # that belongs to someone else - a host X server shared into the container through the
 # /tmp/.X11-unix bind mount in docker-compose.yml, for instance.
 X_DISPLAY_FLOOR = int(os.getenv('SOCKPUPPET_X_DISPLAY_FLOOR', 99))
+
+# Wrappers that must not be mistaken for the browser. Their command line looks exactly like
+# Chrome's because they pass our flags straight through: alpine's /usr/bin/chromium-browser is
+# a symlink to chromium-launcher.sh, and headful mode runs the lot under xvfb-run.
+BROWSER_WRAPPERS = ('sh', 'bash', 'dash', 'ash', 'busybox', 'xvfb-run')
+
+# How long to let Chrome shut itself down before SIGKILLing it. Chrome flushes its cookie
+# store and Local Storage while exiting and takes about 0.2s to do it, so a client reusing a
+# --user-data-dir keeps the session it just logged in with. Set to 0 to go straight to SIGKILL.
+CHROME_SHUTDOWN_GRACE = float(os.getenv('CHROME_SHUTDOWN_GRACE', 3))
 
 # How often to check whether Chrome has died. Only used for logging, so coarse is fine.
 EXIT_POLL_INTERVAL = 0.25
@@ -616,6 +627,10 @@ class ChromeInstance:
         self._killed_by_us = True
         logger.debug(f"WebSocket ID: {self.conn_id} Cleaning up Chrome subprocess PID {self.pid}")
 
+        # Before cancelling the stderr drain, so Chrome's shutdown output still gets consumed
+        # and it never blocks on a full pipe while it is flushing.
+        await self._graceful_stop()
+
         for task in self._tasks:
             task.cancel()
         if self._tasks:
@@ -672,6 +687,60 @@ class ChromeInstance:
             logger.debug(f"WebSocket ID: {self.conn_id} - Released X display(s) "
                          f"{', '.join(sorted(self._xvfb_displays))}")
         self._xvfb_displays = set()
+
+    def _browser_process(self):
+        """The Chrome browser process itself.
+
+        Not necessarily our direct child: that is xvfb-run's shell in headful mode, and a
+        chromium-launcher.sh wrapper on the Alpine image. Identified by the flag only the
+        browser process carries - it owns the CDP endpoint - while renderers and the GPU
+        process carry --type= and signalling those would look like a crash, not a shutdown.
+        """
+        try:
+            parent = psutil.Process(self.proc.pid)
+            candidates = [parent] + parent.children(recursive=True)
+        except (psutil.NoSuchProcess, psutil.AccessDenied, OSError):
+            return None
+
+        for proc in candidates:
+            try:
+                name = proc.name().lower()
+                if name in BROWSER_WRAPPERS or name.endswith('.sh'):
+                    continue
+                args = proc.cmdline()[1:]
+                if any(arg.startswith('--type=') for arg in args):
+                    continue
+                if any(arg.startswith('--remote-debugging-port') for arg in args):
+                    return proc
+            except (psutil.NoSuchProcess, psutil.AccessDenied):
+                continue
+        return None
+
+    async def _graceful_stop(self):
+        """Ask Chrome to shut down, so it flushes storage, and wait a moment for it to finish.
+
+        SIGHUP rather than SIGTERM: measured on Chrome 151, a cookie written a second earlier
+        survives SIGHUP and SIGINT but not SIGTERM (which exits ~100ms sooner) and not SIGKILL.
+        Local Storage survives all but SIGKILL. Without this the proxy SIGKILLs a browser that
+        may be mid-shutdown - including one the client politely asked to close - and whatever
+        it had not yet written is lost.
+        """
+        if CHROME_SHUTDOWN_GRACE <= 0 or self.proc.returncode is not None:
+            return
+
+        browser = self._browser_process()
+        if browser is None:
+            return
+        try:
+            logger.debug(f"WebSocket ID: {self.conn_id} - Asking Chrome to shut down: SIGHUP to "
+                         f"PID {browser.pid} ({browser.name()})")
+            browser.send_signal(signal.SIGHUP)
+        except (psutil.NoSuchProcess, psutil.AccessDenied, OSError):
+            return
+
+        if await self._wait_for_exit(timeout=CHROME_SHUTDOWN_GRACE) is None:
+            logger.debug(f"WebSocket ID: {self.conn_id} - Chrome PID {self.pid} did not exit "
+                         f"within {CHROME_SHUTDOWN_GRACE}s of SIGHUP, killing it")
 
     def _kill_tree(self):
         """SIGKILL the browser and every renderer/GPU child it spawned."""

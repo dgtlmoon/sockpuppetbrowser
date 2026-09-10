@@ -95,6 +95,10 @@ jobs:
         working-directory: pyppeteer-tests
         run: python3 test_container_layer.py
 
+      - name: A reused profile keeps its session
+        working-directory: pyppeteer-tests
+        run: python3 test_profile_persistence.py
+
       # The assertions above cover this, but having the raw list in the log makes an
       # unexpected leftover obvious without re-running anything locally.
       - name: What the container changed on top of its image
