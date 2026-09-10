@@ -418,6 +418,7 @@ class ChromeInstance:
         # a kill is somewhere we delete wholesale. Also covers xvfb-run's Xauthority file.
         env = dict(os.environ, TMPDIR=self._owned_temp_dir)
 
+        # Only matters for a profile the client supplied and reuses: ours is new every time.
         _discard_stale_devtools_port(_user_data_dir_of(self._argv))
         self._launched_at = time.time()
 

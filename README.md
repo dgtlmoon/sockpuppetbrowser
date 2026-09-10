@@ -210,13 +210,45 @@ docker run -e SCREEN_WIDTH=1920 -e SCREEN_HEIGHT=1080 --security-opt seccomp=$(p
 
 If neither is specified, Chrome will use its default viewport size.
 
+### Profile directories (`--user-data-dir`)
+
+- **No `--user-data-dir` on the connection URL** - the proxy creates a throwaway profile for
+  that connection and deletes it at teardown, along with everything else Chrome wrote to temp.
+  Nothing to clean up. (One profile per *connection*, not per page: it lives as long as the
+  websocket, however many pages you load over it. The only leftovers are from the proxy itself
+  being killed, and the next start-up sweeps those.)
+- **`--user-data-dir` supplied** - it is yours. The proxy never creates it, never deletes it
+  and never looks inside, so the profile persists and can be reused by later connections.
+
+Which one you pick decides whether you run out of inodes. A profile is ~198 files and 2.3 MB
+(cookies, history, login data, caches):
+
+| what you pass | left behind per connection | at 100k pages/day |
+|---|---|---|
+| nothing | nothing | zero |
+| one path, reused | +0 files (plateaus at ~217 files) | ~2.3 MB per path, flat |
+| a fresh path each time | ~198 files, 2.3 MB | ~20M files, ~228 GB - inode exhaustion |
+
+So only pass `--user-data-dir` when you need the profile to persist, and reuse a bounded set of
+paths rather than one per watch. A profile serves **one connection at a time** - two at once
+and the second Chrome exits with code 21 (`The profile appears to be in use...`) - so size that
+set to your concurrency.
+
+Keeping a logged-in session in a reused profile: Chrome batches cookie writes, so hold the
+connection open ~30s after logging in and finish with CDP `Browser.close`. `localStorage` needs
+only the `Browser.close`; dropping the websocket flushes neither, because the proxy SIGKILLs
+Chrome in that case.
+
 ### Tuning
 
 Some tips on high-concurrency scraping and tuning where you have a lot of chrome browsers running simultaneously
 
 - Understand different Chrome command line options https://github.com/GoogleChrome/chrome-launcher/blob/main/docs/chrome-flags-for-tools.md and specify them on the connection URL
 - Set your `inotify` values higher https://stackoverflow.com/questions/32281277/too-many-open-files-failed-to-initialize-inotify-the-user-limit-on-the-total
-- Don't burn out your disk!! Mount the path for `--user-data-dir` as a RAM Disk/tmpfs disk ! This will also help to speed up Chrome
+- Don't burn out your disk!! Keep browser profiles on a RAM disk/tmpfs - point
+  `SOCKPUPPET_TEMP_ROOT` at it (or mount your own `--user-data-dir` there). This also speeds
+  Chrome up. See [Profile directories](#profile-directories---user-data-dir) first: at volume,
+  *which* profile path you use matters more than what it is mounted on
 
 On a `Intel(R) Xeon(R) E-2288G CPU @ 3.70GHz` (16 core), it will sustain 150 concurrent browser sessions with a load average of about 65-70 (about 3-4 browsers per CPU core it means).
 
