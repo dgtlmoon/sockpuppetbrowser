@@ -1,0 +1,117 @@
+name: Container test
+
+# Builds the image and drives the proxy inside it with a real CDP client, so a change that
+# breaks page fetching or leaves temp files behind fails here rather than in production.
+on:
+  push:
+    branches: [master]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  container-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+        with:
+          install: true
+
+      # amd64 only and load=true: the tests need the image in the runner's local docker, and
+      # nothing here is architecture-specific. The multi-arch build stays in container-publish.
+      - name: Build the container
+        uses: docker/build-push-action@v6
+        with:
+          context: ./
+          file: ./Dockerfile
+          push: false
+          load: true
+          tags: sockpuppetbrowser:test
+          platforms: linux/amd64
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Start the container
+        run: |
+          docker run -d --name sockpuppet-test --init \
+            --cap-add=SYS_ADMIN \
+            --security-opt seccomp=$(pwd)/chrome.json \
+            -p 127.0.0.1:3000:3000 \
+            -p 127.0.0.1:8080:8080 \
+            -e LOG_LEVEL=DEBUG \
+            -e SCREEN_WIDTH=1920 \
+            -e SCREEN_HEIGHT=1024 \
+            sockpuppetbrowser:test
+
+      - name: Wait for the proxy to accept connections
+        run: |
+          for i in $(seq 1 30); do
+            if curl -sf http://127.0.0.1:8080/stats; then echo; exit 0; fi
+            sleep 1
+          done
+          echo "::error::the proxy never came up"
+          docker logs sockpuppet-test
+          exit 1
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      # The test client only, deliberately not requirements.txt: pyppeteer-ng wants websockets
+      # 10.x while the proxy is pinned to 11.x, and the proxy runs in the container anyway.
+      - name: Install the pyppeteer-ng test client
+        run: pip3 install -r pyppeteer-tests/requirements.txt
+
+      - name: Load a page through the proxy
+        working-directory: pyppeteer-tests
+        run: python3 test_fetch_page.py
+
+      - name: Chrome leaves no temp files behind
+        working-directory: pyppeteer-tests
+        run: python3 test_temp_dir_cleanup.py
+
+      - name: Nothing accumulates in the container's writable layer
+        working-directory: pyppeteer-tests
+        run: python3 test_container_layer.py
+
+      # The assertions above cover this, but having the raw list in the log makes an
+      # unexpected leftover obvious without re-running anything locally.
+      - name: What the container changed on top of its image
+        if: always()
+        run: |
+          mkdir -p pyppeteer-tests/artifacts
+          docker diff sockpuppet-test > pyppeteer-tests/artifacts/docker-diff.txt || true
+          echo "$(wc -l < pyppeteer-tests/artifacts/docker-diff.txt) entries in the writable layer"
+          echo "--- per top-level directory:"
+          awk '{split($2, p, "/"); print "/" p[2]}' pyppeteer-tests/artifacts/docker-diff.txt \
+            | sort | uniq -c | sort -rn
+          # /tmp is where the leaks live, and the profiles the tests asked for are the only
+          # thing that should be in it. The full list is in the uploaded artifact.
+          echo "--- everything directly in /tmp:"
+          grep -E '^[ACD] /tmp/[^/]+$' pyppeteer-tests/artifacts/docker-diff.txt || echo "(nothing)"
+
+      # Runs last: it SIGKILLs and restarts the container.
+      - name: Orphans are swept after the proxy is killed mid-connection
+        working-directory: pyppeteer-tests
+        run: python3 test_proxy_killed.py
+
+      - name: Container logs
+        if: always()
+        run: |
+          mkdir -p pyppeteer-tests/artifacts
+          docker logs sockpuppet-test > pyppeteer-tests/artifacts/container.log 2>&1 || true
+          tail -n 100 pyppeteer-tests/artifacts/container.log
+
+      - name: Upload screenshots, page dumps and logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: container-test-artifacts
+          path: pyppeteer-tests/artifacts/
+          if-no-files-found: warn
+
+      - name: Stop the container
+        if: always()
+        run: docker rm -f sockpuppet-test

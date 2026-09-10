@@ -102,6 +102,64 @@ You can also add this to your fetch and access `'special_counter_len'` at the `/
 
 ```
 
+### Environment variables
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `MAX_CONCURRENT_CHROME_PROCESSES` | `10` | Maximum browsers running at once. |
+| `DROP_EXCESS_CONNECTIONS` | `False` | At capacity: `True` refuses new connections immediately, `False` queues them. |
+| `CONNECTION_QUEUE_TIMEOUT` | `120` | Seconds a queued connection waits for a slot before being dropped. |
+| `CHROME_BIN` | `/usr/bin/google-chrome` | Chrome binary. |
+| `CHROME_HEADFUL` | `false` | Run headful under `xvfb-run`. |
+| `CHROME_START_TIMEOUT` | `25` | Seconds to wait for Chrome to report its CDP endpoint. |
+| `SCREEN_WIDTH` / `SCREEN_HEIGHT` | unset | Fallback `--window-size` when the connection URL doesn't set one. |
+| `WS_PING_INTERVAL` | `20` | Websocket keepalive ping interval, seconds. |
+| `WS_PING_TIMEOUT` | `20` | Seconds to wait for a pong before dropping the connection. |
+| `WS_MAX_QUEUE` | `128` | Per-connection receive queue depth (backpressure). |
+| `LOG_LEVEL` | `DEBUG` | `TRACE`, `DEBUG`, `INFO`, `SUCCESS`, `WARNING`, `ERROR`, `CRITICAL`. |
+| `STATS_REFRESH_SECONDS` | `3` | How often the stats line is logged. |
+| `STARTUP_DELAY` | `0` | Sleep before binding, seconds. |
+| `ALLOW_CDP_LOG` | `False` | Permit `&log-cdp=` per-connection CDP dumps. |
+
+> **Behaviour change:** `DROP_EXCESS_CONNECTIONS` previously did the *opposite* of its name -
+> setting it to `True` made connections queue, and leaving it `False` made them drop. It now
+> matches its name. If you had set it to `True` to get queueing, remove it (or set it to `False`).
+
+If Chrome sessions are dying unexpectedly, `WS_PING_TIMEOUT` is worth raising: a busy page can
+stall long enough for the keepalive to close an otherwise healthy connection, which surfaces
+client-side as `Session closed. Most likely the page has been closed.`
+
+### Diagnosing a dead CDP session
+
+At `DEBUG` the proxy traces the CDP lifecycle, so you can see what the browser was doing:
+
+```
+cdp <id> | -> Page.navigate id=12 'https://example.com/opere'
+cdp <id> | <- Page.frameNavigated 'https://example.com/opere'
+cdp <id> | <- Page.loadEventFired (+2.67s since navigate)
+cdp <id> | <- id=41 Runtime.evaluate OK 184320 bytes in 0.31s (payload returning)
+cdp <id> | <- Inspector.detached reason='target_closed'
+```
+
+When a connection ends, a teardown summary attributes the death:
+
+```
+cdp <id> | teardown after 12.05s: CHROME side closed first (code=1006 reason='')
+    chrome process: rc=-9 (UNEXPECTED - Chrome died on its own)
+    2 commands in flight unanswered: Page.stopLoading(id=44, 2.1s), Runtime.evaluate(id=45, 1.8s)
+```
+
+The three cases it distinguishes:
+
+- **`CHROME side closed first` + `UNEXPECTED - Chrome died on its own`** - Chrome crashed (often
+  renderer OOM). Check memory and `--disable-dev-shm-usage`.
+- **`CHROME side closed first` + `chrome process: still running`** - the CDP websocket dropped
+  while Chrome was healthy, i.e. the keepalive. Raise `WS_PING_TIMEOUT`.
+- **`CLIENT side closed first`** - your script disconnected; the browser was shut down normally.
+
+Commands listed as *in flight unanswered* are exactly the ones that surface client-side as
+`Session closed`.
+
 ### Debug CDP session logs
 
 Sometimes you need to examine the low-level Chrome CDP protocol interaction, enable `ALLOW_CDP_LOG=yes` environment 

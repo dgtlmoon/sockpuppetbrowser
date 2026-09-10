@@ -21,3 +21,6 @@ venv/
 # IDEs
 .idea
 .vscode/settings.json
+
+# pyppeteer test output (screenshots, page dumps, container logs)
+pyppeteer-tests/artifacts/
