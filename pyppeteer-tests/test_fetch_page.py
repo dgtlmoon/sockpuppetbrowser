@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Can a pyppeteer client actually load a page through the proxy?
+"""Can a pyppeteer-ng client actually load a page through the proxy?
 
 Covers the shapes real clients use: a client-supplied --user-data-dir (what
 changedetection.io does), no user-data-dir at all, headful mode under xvfb-run, several
@@ -8,7 +8,7 @@ connections at once, and both teardown paths (plain disconnect vs Browser.close)
 
 import asyncio
 
-from common import Checks, TEST_URL, fetch, run, stats, wait_for_idle
+from common import Checks, TEST_URL, fetch, run, save_artifact, stats, wait_for_idle
 
 
 async def main():
@@ -22,6 +22,9 @@ async def main():
     c.ok('Example Domain' in html, "page content came back through the proxy",
          f"html starts: {html[:120]!r}")
     c.ok(shot and shot[:2] == b'\xff\xd8', f"screenshot is a JPEG ({len(shot or '')} bytes)")
+    if shot:
+        save_artifact('headless-screenshot.jpg', shot)
+    save_artifact('headless-page.html', html)
 
     # No --user-data-dir: the proxy makes a throwaway profile itself.
     status, html, _ = await fetch(screenshot=False)
@@ -29,9 +32,12 @@ async def main():
 
     # Headful, i.e. Chrome under xvfb-run on its own virtual display.
     status, html, shot = await fetch(headful='true',
-                                     **{'--user-data-dir': '/tmp/test-profile-headful'})
+                                     **{'--user-data-dir': '/tmp/test-profile-headful',
+                                        '--window-size': '1920,1024'})
     c.ok(status == 200 and 'Example Domain' in html, f"headful mode: HTTP {status}")
     c.ok(shot and shot[:2] == b'\xff\xd8', f"headful screenshot is a JPEG ({len(shot or '')} bytes)")
+    if shot:
+        save_artifact('headful-screenshot.jpg', shot)
 
     # Graceful teardown: Chrome exits on its own instead of being killed.
     status, html, _ = await fetch(screenshot=False, graceful_close=True,

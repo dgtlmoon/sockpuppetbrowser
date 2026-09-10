@@ -29,7 +29,7 @@ import websockets
 from loguru import logger
 
 from cdp_trace import CDPTracer
-from chrome import ChromeInstance, ChromeStartupError, parse_query_args, sweep_orphan_temp_dirs
+from chrome import ChromeInstance, ChromeStartupError, parse_query_args, sweep_orphans
 from http_server import start_http_server
 
 stats = {
@@ -301,9 +301,9 @@ async def stats_thread_func():
             # Chrome only removes its own temp dirs on a graceful exit and we SIGKILL, so
             # mop up anything a crashed proxy (or a Chrome we didn't launch) left behind.
             # Scratch dirs of live browsers are excluded by path, everything else has to
-            # prove itself dead - see sweep_orphan_temp_dirs().
+            # prove itself dead - see sweep_orphans().
             in_use = {c.temp_dir for c in live_chrome}
-            await loop.run_in_executor(None, lambda: sweep_orphan_temp_dirs(exclude=in_use))
+            await loop.run_in_executor(None, lambda: sweep_orphans(exclude=in_use))
         except asyncio.TimeoutError:
             logger.warning("Process count check failed: timeout")
         except Exception as e:
@@ -335,7 +335,7 @@ async def main(args):
 
     # Nothing of ours is running yet, so anything still lying around is an orphan.
     await asyncio.get_running_loop().run_in_executor(
-        None, lambda: sweep_orphan_temp_dirs(min_age=0))
+        None, lambda: sweep_orphans(min_age=0))
 
     await start_http_server(host=args.host, port=args.sport, stats=stats)
 
