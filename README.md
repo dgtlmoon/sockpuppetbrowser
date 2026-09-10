@@ -104,14 +104,42 @@ docker run --rm --init -e CHROME_HEADFUL=true --security-opt seccomp=$(pwd)/chro
 
 Access `http://127.0.0.1:8080/stats` or which ever hostname you bind to, use `--sport` to specify something other than `8080`
 
-```
+```json
 {
-  "active_connections": 158,
-  "connection_count_total": 8383,
-  "mem_use_percent": 46.9,
+  "active_connections": 21,
+  "child_count": 21,
+  "connection_count_total": 467,
+  "chrome_start_failures": 3,
+  "cdp_connect_failures": 0,
+  "quiet_sessions": 1,
+  "dropped_threshold_reached": 0,
+  "dropped_waited_too_long": 0,
+  "mem_use_percent": 17.7,
   "special_counter_len": 0
 }
 ```
+
+Counters run for the life of the process and reset when the container restarts;
+`connection_count_total` is the denominator for the rest.
+
+| Field | Meaning |
+|---|---|
+| `active_connections` | Connections being served right now. Should track the number of browser processes - if it does not, browsers are outliving their connections. |
+| `child_count` | Direct children of the proxy. Far above `active_connections` means processes are piling up: zombies, if the container is running without an init. |
+| `connection_count_total` | Connections accepted since start. |
+| `chrome_start_failures` | Chrome never came up - binary missing, exited during startup, or the profile was locked by another browser (exit code 21). |
+| `cdp_connect_failures` | Chrome came up and announced an endpoint, but was gone or unreachable when the proxy dialled it. |
+| `quiet_sessions` | Attached fine, then relayed less than `CDP_QUIET_SESSION_BYTES` - the client connected and did nothing with the browser. |
+| `dropped_threshold_reached` | Refused at capacity, with `DROP_EXCESS_CONNECTIONS=True`. |
+| `dropped_waited_too_long` | Queued for a slot and gave up after `CONNECTION_QUEUE_TIMEOUT`. |
+| `mem_use_percent` | System memory in use. |
+| `special_counter_len` | See below. |
+
+The three failure counters are mutually exclusive, so
+`(chrome_start_failures + cdp_connect_failures) / connection_count_total` is a launch failure
+rate worth alerting on. Failures *during* a session are not counted here - those appear in the
+teardown summary in the log, which also reports how many bytes were relayed each way. See
+[Diagnosing a dead CDP session](#diagnosing-a-dead-cdp-session).
 
 You can also add this to your fetch and access `'special_counter_len'` at the `/stats` URL, this is good for adding at the end of your scripts so you know the actual script ran all steps.
 
@@ -139,6 +167,7 @@ You can also add this to your fetch and access `'special_counter_len'` at the `/
 | `WS_PING_TIMEOUT` | `20` | Seconds to wait for a pong before dropping the connection. |
 | `WS_MAX_QUEUE` | `128` | Per-connection receive queue depth (backpressure). |
 | `WS_CLOSE_TIMEOUT` | `5` | Seconds to wait for a client's closing handshake before dropping the connection. |
+| `CDP_QUIET_SESSION_BYTES` | `100` | A session relaying fewer bytes than this counts as `quiet_sessions` in `/stats`. `0` disables the check. |
 | `SOCKPUPPET_TEMP_ROOT` | `/tmp` | Where each browser's scratch dir (profile + Chrome's own `TMPDIR`) is created. |
 | `SOCKPUPPET_SWEEP_MIN_AGE` | `300` | Seconds before an unclaimed scratch dir or X lock is treated as an orphan. |
 | `SOCKPUPPET_X_DISPLAY_FLOOR` | `99` | Lowest X display the orphan sweep will release; below this is assumed to be someone else's. |

@@ -123,6 +123,12 @@ jobs:
           TEST_IMAGE: sockpuppetbrowser:test
         run: python3 test_no_zombies.py
 
+      - name: The /stats failure counters move when things fail
+        working-directory: pyppeteer-tests
+        env:
+          TEST_IMAGE: sockpuppetbrowser:test
+        run: python3 test_stats_counters.py
+
       # Runs last: it SIGKILLs and restarts the container.
       - name: Orphans are swept after the proxy is killed mid-connection
         working-directory: pyppeteer-tests
