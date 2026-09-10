@@ -17,6 +17,7 @@ wholesale, and releases the X display it used, so /tmp should look untouched aft
 Needs docker: it inspects /tmp inside CONTAINER_NAME.
 """
 
+import ast
 import re
 
 from common import CONTAINER_NAME, Checks, fetch, in_container, run, wait_for_idle
@@ -55,10 +56,32 @@ def x_sockets():
     return sorted(e for e in out.split('\n') if e)
 
 
+# Everything Chrome starts, matched on process name. The previous check grepped for
+# "chromium" alone, which missed chrome_crashpad_handler entirely - and those are exactly what
+# survives a graceful shutdown, because Chrome lets them outlive the browser on purpose.
+STRAY_SCRIPT = r"""
+import os
+NAMES = ('chrome', 'chromium', 'chrome_crashpad', 'chrome_crashpad_handler',
+         'Xvfb', 'xvfb-run')
+found = []
+for pid in os.listdir('/proc'):
+    if not pid.isdigit():
+        continue
+    try:
+        stat = open('/proc/' + pid + '/stat').read()
+    except OSError:
+        continue
+    comm = stat[stat.index('(') + 1:stat.rindex(')')]
+    state = stat[stat.rindex(')') + 2]
+    if comm in NAMES:
+        found.append((pid, comm, state))
+print(found)
+"""
+
+
 def stray_processes():
-    """Chrome or Xvfb processes still alive in the container."""
-    out = in_container('sh', '-c', 'pgrep -a chromium; pgrep -a Xvfb; true')
-    return [line for line in out.split('\n') if line.strip()]
+    """Any Chrome-family process still in the container: alive, zombie, whatever."""
+    return ast.literal_eval(in_container('python3', '-c', STRAY_SCRIPT).strip())
 
 
 async def main():
@@ -103,7 +126,9 @@ async def main():
     c.ok(not sockets, "every X display was released", f"sockets still present: {sockets}")
 
     alive = stray_processes()
-    c.ok(not alive, "no Chrome or Xvfb processes left running", "still alive:\n" + '\n'.join(alive))
+    c.ok(not alive, f"no Chrome-family processes left behind ({len(alive)} found)",
+         "still there (pid, name, state - S/R are alive, Z is an unreaped zombie):\n        "
+         + '\n        '.join(str(p) for p in alive[:12]))
 
     c.done()
 

@@ -79,12 +79,12 @@ async def main():
          "both rounds fetched successfully",
          f"{first_statuses} then {second_statuses}")
 
+    # Growth is the leak; things going away are not. Xvfb's shadow framebuffer
+    # (/var/tmp/Xvfb_screen0) comes and goes depending on whether the X server got to clean up
+    # after itself, so requiring the two rounds to match exactly makes this flaky for no gain.
     added = sorted(set(second) - set(first))
-    removed = sorted(set(first) - set(second))
     c.ok(not added, "round two added nothing new to the layer",
          "grew by:\n        " + '\n        '.join(f"{ch} {p}" for ch, p in added))
-    c.ok(not removed, "round two removed nothing that round one left",
-         "disappeared:\n        " + '\n        '.join(f"{ch} {p}" for ch, p in removed))
 
     # ...and nothing that looks like a known leftover, whichever round produced it.
     in_tmp = [p.rpartition('/')[2] for _, p in second if p.rpartition('/')[0] == '/tmp']

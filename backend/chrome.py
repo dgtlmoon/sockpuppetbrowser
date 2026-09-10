@@ -71,6 +71,10 @@ SINGLETON_DIR_GLOBS = (
 # dir with no socket in it yet must not be mistaken for an orphan.
 SWEEP_MIN_AGE = float(os.getenv('SOCKPUPPET_SWEEP_MIN_AGE', 300))
 
+# The symlinks Chrome's ProcessSingleton keeps in a profile. It removes them on a clean exit;
+# we SIGKILL when a graceful shutdown does not finish, so a reused profile inherits them.
+SINGLETON_LINKS = ('SingletonSocket', 'SingletonCookie', 'SingletonLock')
+
 # Lowest X display the sweep will touch. `xvfb-run -a` starts looking at :99, so anything below
 # that belongs to someone else - a host X server shared into the container through the
 # /tmp/.X11-unix bind mount in docker-compose.yml, for instance.
@@ -285,6 +289,44 @@ def _unix_socket_state(path, timeout=0.25):
         sock.close()
 
 
+def _clear_stale_singleton(user_data_dir, conn_id='unknown'):
+    """Clear Singleton* links a dead browser left in a client-supplied profile.
+
+    Chrome decides whether a profile is in use by connecting to its SingletonSocket, and it
+    copes with a dead one by itself - except when SingletonLock names a different host, where
+    it refuses outright and keeps refusing:
+
+        The profile appears to be in use by another Google Chrome process (323270)
+        on another computer (989ba27971e3).
+
+    A container gets a new hostname every time it is recreated, so a profile dir kept on a
+    bind-mounted volume (a ramdisk at /tmp, for instance) is poisoned by every restart, and
+    every connection using it fails from then on. Chrome's own advice is to delete the three
+    links, which is what this does.
+
+    Only when the socket actively refuses a connection - nothing is listening. A live browser's
+    profile is left alone, so Chrome's protection against two browsers sharing a profile still
+    works, and a socket we cannot classify (no AF_UNIX on this platform, say) is left to Chrome
+    to judge.
+    """
+    if not user_data_dir:
+        return
+    socket_path = os.path.join(user_data_dir, 'SingletonSocket')
+    if not os.path.lexists(socket_path):
+        return
+    if _unix_socket_state(socket_path) != 'dead':
+        return
+
+    for name in SINGLETON_LINKS:
+        try:
+            os.unlink(os.path.join(user_data_dir, name))
+        except FileNotFoundError:
+            pass
+        except OSError as e:
+            logger.debug(f"WebSocket ID: {conn_id} - Could not remove {name} in {user_data_dir}: {e}")
+    logger.debug(f"WebSocket ID: {conn_id} - Cleared a stale profile lock in {user_data_dir}")
+
+
 def _singleton_socket_is_live(path):
     """Is a Chrome still listening on the SingletonSocket inside this dir?
 
@@ -408,6 +450,7 @@ class ChromeInstance:
         self._owned_temp_dir = None
         self._xvfb_displays = set()
         self._launched_at = None
+        self._pgid = None
         self._killed_by_us = False
         self._exit_reported = False
         self._tasks = []
@@ -447,16 +490,26 @@ class ChromeInstance:
         # a kill is somewhere we delete wholesale. Also covers xvfb-run's Xauthority file.
         env = dict(os.environ, TMPDIR=self._owned_temp_dir)
 
-        # Only matters for a profile the client supplied and reuses: ours is new every time.
-        _discard_stale_devtools_port(_user_data_dir_of(self._argv))
+        # Both only matter for a profile the client supplied and reuses: ours is new every
+        # time. Chrome leaves these behind whenever it is killed rather than closed.
+        user_data_dir = _user_data_dir_of(self._argv)
+        _discard_stale_devtools_port(user_data_dir)
+        _clear_stale_singleton(user_data_dir, self.conn_id)
         self._launched_at = time.time()
 
         try:
             # stdout to /dev/null: Chrome puts everything we care about on stderr, and an
             # undrained pipe blocks the browser once the 64KB kernel buffer fills.
+            # start_new_session puts Chrome in its own process group, so teardown can signal
+            # the whole group. Without it, anything that outlives the browser process can only
+            # be found by walking the tree - and by then there is no tree left to walk.
             self.proc = await asyncio.create_subprocess_exec(
-                *argv, stdout=DEVNULL, stderr=PIPE, env=env
+                *argv, stdout=DEVNULL, stderr=PIPE, env=env,
+                start_new_session=not WINDOWS,
             )
+            # Session leader, so the group id is the pid. Remembered because the pid may be
+            # reaped before we get to teardown.
+            self._pgid = None if WINDOWS else self.proc.pid
         except FileNotFoundError:
             self._cleanup_temp_dir()
             raise ChromeStartupError(
@@ -645,6 +698,9 @@ class ChromeInstance:
         self._killed_by_us = True
         logger.debug(f"WebSocket ID: {self.conn_id} Cleaning up Chrome subprocess PID {self.pid}")
 
+        # Snapshot the tree while everything is still alive - see _process_tree().
+        tree = self._process_tree()
+
         # Before cancelling the stderr drain, so Chrome's shutdown output still gets consumed
         # and it never blocks on a full pipe while it is flushing.
         await self._graceful_stop()
@@ -655,7 +711,7 @@ class ChromeInstance:
             await asyncio.gather(*self._tasks, return_exceptions=True)
         self._tasks = []
 
-        self._kill_tree()
+        self._kill_tree(tree)
 
         try:
             rc = await self._wait_for_exit(timeout=5.0)
@@ -766,28 +822,66 @@ class ChromeInstance:
             logger.debug(f"WebSocket ID: {self.conn_id} - Chrome PID {self.pid} did not exit "
                          f"within {CHROME_SHUTDOWN_GRACE}s of SIGHUP, killing it")
 
-    def _kill_tree(self):
-        """SIGKILL the browser and every renderer/GPU child it spawned."""
+    def _process_tree(self):
+        """Our subprocess and every descendant, as psutil handles.
+
+        Worth taking *before* asking Chrome to shut down: once the browser process has exited
+        there is no tree left to enumerate, and anything it left behind becomes invisible here.
+        """
         try:
             parent = psutil.Process(self.proc.pid)
-            children = parent.children(recursive=True)
-            self._note_xvfb_displays([parent] + children)
-            if children:
-                logger.debug(f"WebSocket ID: {self.conn_id} - Killing {len(children) + 1} Chrome processes")
-            # Children first, then the browser: killing a process does not kill its children on
-            # any platform (Windows especially - there is no process group to signal), and
-            # taking the browser down first can leave it spawning a crash handler for whichever
-            # renderer went away underneath it.
-            for proc in children + [parent]:
-                try:
-                    proc.kill()
-                except (psutil.NoSuchProcess, psutil.AccessDenied):
-                    pass
+            return [parent] + parent.children(recursive=True)
         except (psutil.NoSuchProcess, psutil.AccessDenied, OSError):
+            return []
+
+    def _kill_tree(self, tree=None):
+        """SIGKILL whatever is left of the browser, its children, and its process group.
+
+        The group is the part that matters. Chrome's crashpad handlers outlive the browser on
+        purpose, and a renderer that is stopped or wedged will not notice its parent going
+        away, so after a graceful shutdown there can be survivors with no tree to find them
+        through - they reparent to PID 1 and stay there for the life of the container. Killing
+        the group catches them whether or not the browser is still around.
+        """
+        tree = self._process_tree() if tree is None else tree
+        self._note_xvfb_displays(tree)
+
+        if len(tree) > 1:
+            logger.debug(f"WebSocket ID: {self.conn_id} - Killing {len(tree)} Chrome processes")
+
+        # Children first, then the browser: killing a process does not kill its children, and
+        # taking the browser down first can leave it spawning a crash handler for whichever
+        # renderer went away underneath it.
+        for proc in tree[1:] + tree[:1]:
+            try:
+                proc.kill()
+            except (psutil.NoSuchProcess, psutil.AccessDenied):
+                pass
+
+        self._kill_process_group()
+
+        if not tree:
             try:
                 self.proc.kill()
             except (OSError, ProcessLookupError):
-                pass  # Already gone
+                pass  # already gone
+
+    def _kill_process_group(self):
+        """SIGKILL Chrome's whole process group, including anything we could not enumerate."""
+        if not self._pgid or not hasattr(os, 'killpg'):
+            return
+        try:
+            if self._pgid == os.getpgid(0):
+                return  # never our own group - start_new_session must have failed
+        except OSError:
+            pass
+        try:
+            os.killpg(self._pgid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass  # the group is already empty, which is the normal case
+        except OSError as e:
+            logger.debug(f"WebSocket ID: {self.conn_id} - Could not kill process group "
+                         f"{self._pgid}: {e}")
 
     def _cleanup_temp_dir(self):
         """Remove our scratch dir: profile, Chrome's singleton socket dir, temp shmem files."""
