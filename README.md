@@ -116,6 +116,10 @@ You can also add this to your fetch and access `'special_counter_len'` at the `/
 | `WS_PING_INTERVAL` | `20` | Websocket keepalive ping interval, seconds. |
 | `WS_PING_TIMEOUT` | `20` | Seconds to wait for a pong before dropping the connection. |
 | `WS_MAX_QUEUE` | `128` | Per-connection receive queue depth (backpressure). |
+| `WS_CLOSE_TIMEOUT` | `5` | Seconds to wait for a client's closing handshake before dropping the connection. |
+| `SOCKPUPPET_TEMP_ROOT` | `/tmp` | Where each browser's scratch dir (profile + Chrome's own `TMPDIR`) is created. |
+| `SOCKPUPPET_SWEEP_MIN_AGE` | `300` | Seconds before an unclaimed scratch dir or X lock is treated as an orphan. |
+| `SOCKPUPPET_X_DISPLAY_FLOOR` | `99` | Lowest X display the orphan sweep will release; below this is assumed to be someone else's. |
 | `LOG_LEVEL` | `DEBUG` | `TRACE`, `DEBUG`, `INFO`, `SUCCESS`, `WARNING`, `ERROR`, `CRITICAL`. |
 | `STATS_REFRESH_SECONDS` | `3` | How often the stats line is logged. |
 | `STARTUP_DELAY` | `0` | Sleep before binding, seconds. |
@@ -217,6 +221,36 @@ Some tips on high-concurrency scraping and tuning where you have a lot of chrome
 On a `Intel(R) Xeon(R) E-2288G CPU @ 3.70GHz` (16 core), it will sustain 150 concurrent browser sessions with a load average of about 65-70 (about 3-4 browsers per CPU core it means).
 
 Most of the CPU load seems to occur when starting a browser, maybe in the future 1 browser could processes multiple requests.
+
+### Running the tests
+
+`pyppeteer-tests/` drives a running container over CDP with pyppeteer-ng - the same client
+changedetection.io uses - and checks that pages load and that nothing is left behind
+afterwards. Against a container already listening on the default ports:
+
+```bash
+pip3 install -r pyppeteer-tests/requirements.txt
+cd pyppeteer-tests
+python3 test_fetch_page.py          # loads example.com headless, headful and concurrently
+python3 test_temp_dir_cleanup.py    # /tmp is untouched after every teardown
+python3 test_container_layer.py     # nothing accumulates in the container's writable layer
+python3 test_proxy_killed.py        # orphans are swept after a SIGKILL mid-connection
+```
+
+`CDP_URL`, `STATS_URL`, `CONTAINER_NAME` and `TEST_URL` override where they point. The three
+that inspect the container need docker; `test_proxy_killed.py` stops and starts it.
+
+CI runs all of it against several browser builds in parallel - current Chrome Stable, a pinned
+Chrome, and the Chromium 119 image (`Dockerfile.chromium119`) that earlier releases shipped -
+because they do not behave identically. Chromium 119's old `--headless` has no
+`ProcessSingleton` and so creates no singleton socket dir, while current Chrome's does, and
+`chrome.json`'s seccomp profile has to suit both musl and glibc. To test another version:
+
+```bash
+docker build -t sock:test --build-arg CHROME_VERSION=151.0.7922.173-1 .   # or "current"
+```
+
+Google's deb pool only keeps recent releases, so old pins will 404.
 
 ### Docker healthcheck
 

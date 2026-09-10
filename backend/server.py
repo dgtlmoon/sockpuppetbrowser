@@ -333,9 +333,15 @@ async def main(args):
         except NotImplementedError:
             pass  # Not available on all platforms
 
-    # Nothing of ours is running yet, so anything still lying around is an orphan.
-    await asyncio.get_running_loop().run_in_executor(
-        None, lambda: sweep_orphans(min_age=0))
+    # Nothing of ours is running yet, so anything still lying around is an orphan. Called
+    # inline rather than in an executor: it is quick, nothing is competing with it yet, and
+    # this is the first thread the process would ask for - a container that cannot spawn one
+    # (an old seccomp profile blocking clone3, a pids limit) would fail here instead of
+    # somewhere that says what is actually wrong.
+    try:
+        sweep_orphans(min_age=0)
+    except Exception as e:
+        logger.warning(f"Startup sweep of orphaned temp dirs failed, continuing anyway: {e}")
 
     await start_http_server(host=args.host, port=args.sport, stats=stats)
 
