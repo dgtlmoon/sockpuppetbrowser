@@ -58,6 +58,11 @@ SINGLETON_DIR_GLOBS = (
 # dir with no socket in it yet must not be mistaken for an orphan.
 SWEEP_MIN_AGE = float(os.getenv('SOCKPUPPET_SWEEP_MIN_AGE', 300))
 
+# Lowest X display the sweep will touch. `xvfb-run -a` starts looking at :99, so anything below
+# that belongs to someone else - a host X server shared into the container through the
+# /tmp/.X11-unix bind mount in docker-compose.yml, for instance.
+X_DISPLAY_FLOOR = int(os.getenv('SOCKPUPPET_X_DISPLAY_FLOOR', 99))
+
 # How often to check whether Chrome has died. Only used for logging, so coarse is fine.
 EXIT_POLL_INTERVAL = 0.25
 
@@ -212,30 +217,36 @@ def _user_data_dir_of(argv):
     return None
 
 
+def _unix_socket_state(path, timeout=0.25):
+    """'live', 'dead' or 'unknown' for a unix socket - is anything listening on it?
+
+    This is the test Chrome itself uses on a profile it finds already locked, and the same one
+    works for an X display: a running server accepts the connection, a dead one's leftover
+    socket refuses it.
+    """
+    sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    try:
+        sock.settimeout(timeout)
+        sock.connect(path)
+        return 'live'
+    except (ConnectionRefusedError, FileNotFoundError):
+        return 'dead'
+    except OSError:
+        return 'unknown'  # permissions, ENOTSOCK, timeout - not ours to judge
+    finally:
+        sock.close()
+
+
 def _singleton_socket_is_live(path):
     """Is a Chrome still listening on the SingletonSocket inside this dir?
 
-    Same test Chrome uses on a profile it finds already locked: a running browser accepts the
-    connection, a dead one's socket is refused. The socket is at <dir>/SingletonSocket for a
-    bare singleton dir, or one level down for a scratch dir of ours (which is the browser's
-    TMPDIR, so the singleton dir sits inside it). Anything we cannot classify counts as live,
-    so a sweep never races a browser that is still working.
+    The socket is at <dir>/SingletonSocket for a bare singleton dir, or one level down for a
+    scratch dir of ours (which is the browser's TMPDIR, so the singleton dir sits inside it).
+    Anything we cannot classify counts as live, so a sweep never races a working browser.
     """
     sockets = glob.glob(os.path.join(path, 'SingletonSocket'))
     sockets += glob.glob(os.path.join(path, '*', 'SingletonSocket'))
-    for sock_path in sockets:
-        s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-        try:
-            s.settimeout(0.25)
-            s.connect(sock_path)
-            return True
-        except (ConnectionRefusedError, FileNotFoundError):
-            continue
-        except OSError:
-            return True  # permissions, ENOTSOCK, timeout - don't touch what we can't judge
-        finally:
-            s.close()
-    return False
+    return any(_unix_socket_state(p) != 'dead' for p in sockets)
 
 
 def sweep_orphan_temp_dirs(exclude=(), min_age=SWEEP_MIN_AGE, temp_root=TEMP_ROOT):
@@ -270,6 +281,53 @@ def sweep_orphan_temp_dirs(exclude=(), min_age=SWEEP_MIN_AGE, temp_root=TEMP_ROO
     if removed:
         logger.info(f"Swept {removed} orphaned Chrome temp dir(s) from {temp_root}")
     return removed
+
+
+def sweep_orphan_x_displays(min_age=SWEEP_MIN_AGE):
+    """Release X displays whose Xvfb is gone. Returns the number released.
+
+    Per-connection cleanup handles this (see ChromeInstance._cleanup_xvfb), so what is left
+    here comes from a proxy that was killed before it could tear a headful browser down. The
+    lock alone is enough to make `xvfb-run -a` skip that display number for good.
+    """
+    now = time.time()
+    released = 0
+
+    for lock in glob.glob(X11_LOCK.format(display='*')):
+        match = re.search(r'\.X(\d+)-lock$', lock)
+        if not match:
+            continue
+        display = match.group(1)
+        if int(display) < X_DISPLAY_FLOOR:
+            continue
+        try:
+            if now - os.stat(lock).st_mtime < min_age:
+                continue
+        except OSError:
+            continue
+        sock_path = X11_SOCKET.format(display=display)
+        if _unix_socket_state(sock_path) != 'dead':
+            continue  # an X server is still answering on this display, or we cannot tell
+        for path in (lock, sock_path):
+            try:
+                os.unlink(path)
+            except OSError:
+                pass
+        released += 1
+
+    if released:
+        logger.info(f"Swept {released} orphaned X display lock(s)")
+    return released
+
+
+def sweep_orphans(exclude=(), min_age=SWEEP_MIN_AGE, temp_root=TEMP_ROOT):
+    """Clean up after browsers whose proxy never got to its teardown path.
+
+    Returns the total number of things removed. Called at startup (where nothing of ours is
+    running yet, so min_age can be 0) and periodically while serving.
+    """
+    return (sweep_orphan_temp_dirs(exclude=exclude, min_age=min_age, temp_root=temp_root)
+            + sweep_orphan_x_displays(min_age=min_age))
 
 
 class ChromeStartupError(RuntimeError):

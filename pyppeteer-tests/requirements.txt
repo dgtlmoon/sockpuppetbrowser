@@ -1,5 +1,7 @@
 # The CDP client used by changedetection.io, so the proxy gets tested the way it is really
-# driven. Deliberately NOT installed alongside ../requirements.txt: pyppeteer wants
-# websockets 10.x while the proxy itself is pinned to 11.x. These tests are a *client*, they
-# run outside the container.
-pyppeteer==1.0.2
+# driven. Only pre-releases are published, hence the exact pin.
+#
+# Deliberately NOT installed alongside ../requirements.txt: pyppeteer-ng wants websockets 10.x
+# while the proxy itself is pinned to 11.x. These tests are a *client*, they run outside the
+# container.
+pyppeteer-ng==2.0.0rc16

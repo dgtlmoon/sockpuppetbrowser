@@ -59,9 +59,9 @@ jobs:
         with:
           python-version: '3.12'
 
-      # The test client only, deliberately not requirements.txt: pyppeteer wants websockets
+      # The test client only, deliberately not requirements.txt: pyppeteer-ng wants websockets
       # 10.x while the proxy is pinned to 11.x, and the proxy runs in the container anyway.
-      - name: Install the pyppeteer test client
+      - name: Install the pyppeteer-ng test client
         run: pip3 install -r pyppeteer-tests/requirements.txt
 
       - name: Load a page through the proxy
@@ -72,9 +72,45 @@ jobs:
         working-directory: pyppeteer-tests
         run: python3 test_temp_dir_cleanup.py
 
+      - name: Nothing accumulates in the container's writable layer
+        working-directory: pyppeteer-tests
+        run: python3 test_container_layer.py
+
+      # The assertions above cover this, but having the raw list in the log makes an
+      # unexpected leftover obvious without re-running anything locally.
+      - name: What the container changed on top of its image
+        if: always()
+        run: |
+          mkdir -p pyppeteer-tests/artifacts
+          docker diff sockpuppet-test > pyppeteer-tests/artifacts/docker-diff.txt || true
+          echo "$(wc -l < pyppeteer-tests/artifacts/docker-diff.txt) entries in the writable layer"
+          echo "--- per top-level directory:"
+          awk '{split($2, p, "/"); print "/" p[2]}' pyppeteer-tests/artifacts/docker-diff.txt \
+            | sort | uniq -c | sort -rn
+          # /tmp is where the leaks live, and the profiles the tests asked for are the only
+          # thing that should be in it. The full list is in the uploaded artifact.
+          echo "--- everything directly in /tmp:"
+          grep -E '^[ACD] /tmp/[^/]+$' pyppeteer-tests/artifacts/docker-diff.txt || echo "(nothing)"
+
+      # Runs last: it SIGKILLs and restarts the container.
+      - name: Orphans are swept after the proxy is killed mid-connection
+        working-directory: pyppeteer-tests
+        run: python3 test_proxy_killed.py
+
       - name: Container logs
         if: always()
-        run: docker logs sockpuppet-test
+        run: |
+          mkdir -p pyppeteer-tests/artifacts
+          docker logs sockpuppet-test > pyppeteer-tests/artifacts/container.log 2>&1 || true
+          tail -n 100 pyppeteer-tests/artifacts/container.log
+
+      - name: Upload screenshots, page dumps and logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: container-test-artifacts
+          path: pyppeteer-tests/artifacts/
+          if-no-files-found: warn
 
       - name: Stop the container
         if: always()
