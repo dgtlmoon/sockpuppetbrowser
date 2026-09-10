@@ -245,6 +245,11 @@ If neither is specified, Chrome will use its default viewport size.
 Which one you pick decides whether you run out of inodes. A profile is ~198 files and 2.3 MB
 (cookies, history, login data, caches):
 
+**WARNING** You cannot use the same profile directory concurrently in Chrome! You may see errors
+such as ` Exception 'Protocol error Target.getBrowserContexts: Target closed.'`, Chrome cannot
+share the same profile across multiple chrome runners.
+
+
 | what you pass | left behind per connection | at 100k pages/day |
 |---|---|---|
 | nothing | nothing | zero |
