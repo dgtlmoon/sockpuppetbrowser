@@ -54,6 +54,27 @@ docker run --rm --security-opt seccomp=$(pwd)/chrome.json -p 127.0.0.1:3000:3000
 
 `seccomp` security setting is _highly_ recommended https://github.com/Zenika/alpine-chrome?tab=readme-ov-file#-the-best-with-seccomp
 
+### Windows
+
+**Not supported** - but it might work. The proxy is written for, tested on and shipped as a
+Linux container; that is the only configuration CI covers. Running `server.py` natively on
+Windows is not stopped from working, and the obvious platform bits are handled: `CHROME_BIN`
+defaults to `C:\Program Files\Google\Chrome\Application\chrome.exe`, profiles go to the
+platform temp dir, and the process tree is torn down through `psutil` rather than anything
+POSIX-specific.
+
+Expect these differences, all of them untested by us:
+
+- **Headful mode does not work.** It runs Chrome under `xvfb-run` on a virtual X display.
+- **No graceful shutdown.** Chrome flushes cookies and Local Storage when it is asked to exit
+  with SIGHUP, which Windows has no equivalent of, so a reused `--user-data-dir` may lose
+  whatever was written in the last ~30 seconds of a connection.
+- **No orphan sweep.** Cleaning up after a browser whose proxy was killed relies on unix
+  sockets and X display locks, so it is skipped.
+
+Patches are welcome, but please open them as their own PR against the current `master` and say
+what you tested on - a Windows change that has to be guessed at is worse than none.
+
 ### Headful Mode with Virtual Display
 
 By default, Chrome runs in headless mode for maximum performance. However, you can enable "headful" mode which runs Chrome with a virtual X server (Xvfb) for scenarios requiring visual rendering or when certain websites detect headless browsers.
