@@ -10,18 +10,21 @@ ARG TARGETARCH
 # A deb version like 151.0.7922.173-1, or "current" for whatever Chrome Stable is today.
 # Google's deb pool only keeps recent releases, so pinning an old version will 404.
 ARG CHROME_VERSION=current
+# Extra Debian packages to bake in, space separated. Installed in their own layer so changing
+# them does not re-download Chrome. See "Fonts and fingerprinting" in the README before adding
+# fonts here - a font set nobody else has makes the browser easier to single out, not harder.
+ARG EXTRA_LINUX_PACKAGES=""
 RUN set -eux; \
 	apt-get update; \
 	apt-get install -y --no-install-recommends \
 		ca-certificates \
 		curl \
 		fonts-liberation \
-		gcc \
-		libc6-dev \
+		fonts-noto-cjk \
+		fonts-noto-color-emoji \
+		fonts-noto-core \
 		openbox \
 		python3 \
-		python3-dev \
-		python3-pip \
 		python3-venv \
 		tini \
 		xauth \
@@ -41,6 +44,15 @@ RUN set -eux; \
 	apt-get purge -y --auto-remove curl; \
 	rm -rf /var/lib/apt/lists/*; \
 	useradd --create-home --shell /bin/bash chrome
+
+# Kept separate from the layer above so that rebuilding with different extras does not re-fetch
+# Chrome, and so that an unavailable package name fails here rather than poisoning that cache.
+RUN set -eux; \
+	if [ -n "${EXTRA_LINUX_PACKAGES}" ]; then \
+		apt-get update; \
+		apt-get install -y --no-install-recommends ${EXTRA_LINUX_PACKAGES}; \
+		rm -rf /var/lib/apt/lists/*; \
+	fi
 # Copy and setup entrypoint script
 COPY entrypoint.sh /usr/local/bin/entrypoint.sh
 RUN chmod +x /usr/local/bin/entrypoint.sh && \
@@ -51,7 +63,6 @@ RUN chmod +x /usr/local/bin/entrypoint.sh && \
 
 USER chrome
 
-#@todo Add some random collection of fonts and other stuff to blur the fingerprint a bit
 #ENV LANG en_US.utf8
 #RUN apt-get update && apt-get install -y python3-pip python3-venv locales git \
 	#&& localedef -i en_US -c -f UTF-8 -A /usr/share/locale/locale.alias en_US.UTF-8
@@ -70,5 +81,9 @@ ENV CHROME_BIN=/usr/bin/google-chrome-stable \
 
 #ENV CHROMIUM_FLAGS="--disable-software-rasterizer --disable-dev-shm-usage"
 
-RUN python3 -m venv . && . ./bin/activate && ./bin/pip3 install -r requirements.txt
+# --only-binary: the image carries no compiler, by design (gcc + libc6-dev + python3-dev cost
+# 261MB of layer for packages that all publish wheels). A dependency bump that would need to
+# build from source fails loudly here instead of silently reintroducing a toolchain.
+RUN python3 -m venv . && . ./bin/activate && \
+    ./bin/pip3 install --no-cache-dir --only-binary=:all: -r requirements.txt
 CMD ["/usr/local/bin/entrypoint.sh"]

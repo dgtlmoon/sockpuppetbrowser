@@ -1,7 +1,15 @@
 version: "3"
 services:
   app:
-    build: .
+    build:
+      context: .
+      args:
+        # Extra Debian packages to bake into the image, space separated. Nothing needs to go
+        # here for normal use - the image already ships Noto (CJK, emoji, core) so pages in
+        # any script render instead of showing tofu boxes.
+        # Read "Fonts and fingerprinting" in the README first: a font set nobody else has is
+        # itself a fingerprint, so add whole distro font sets rather than a bespoke handful.
+        EXTRA_LINUX_PACKAGES: ""
     # Reap Chrome's orphaned renderers/crashpad/Xvfb processes; the image also runs tini
     # internally, this covers anyone overriding the entrypoint.
     init: true

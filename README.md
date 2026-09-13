@@ -350,6 +350,51 @@ docker build -t sock:test --build-arg CHROME_VERSION=151.0.7922.173-1 .   # or "
 
 Google's deb pool only keeps recent releases, so old pins will 404.
 
+### Fonts and fingerprinting
+
+The image ships Noto - `fonts-noto-core`, `fonts-noto-cjk`, `fonts-noto-color-emoji` - on top
+of `fonts-liberation`. Without them Chrome has no glyphs outside Latin/Cyrillic/Greek and any
+page in Chinese, Japanese, Korean, Arabic or Hebrew renders as a row of tofu boxes (`□□□`).
+That is silent corruption in the output that matters most here: a screenshot of tofu looks
+plausible, and a text diff of tofu is a diff of nothing.
+
+Fonts *are* a fingerprinting surface - a page cannot enumerate them, but it can probe for named
+families with `document.fonts.check()` or by measuring text in a canvas, and the set that comes
+back is high entropy. The thing to avoid, though, is being **unique**, not being **legible**:
+
+- Liberation alone is not anonymous, it is the signature of a bare headless-container Chrome.
+  Bot-detection vendors already score "desktop UA, almost no system fonts" as a bot signal.
+- Noto core + CJK + emoji is close to what a stock Debian or Ubuntu desktop installs, so it
+  lands in a large, real population of Linux Chrome users instead of a small one.
+- A bespoke handful of fonts is the worst of the three. Twenty fonts nobody else pairs together
+  identify you better than either extreme. If you add fonts, add whole distro font sets.
+
+One inconsistency worth knowing about: if you spoof a Windows `User-Agent`, a Linux font set
+contradicts it, and that mismatch is itself checkable. Matching it properly means Microsoft's
+core fonts, which are not redistributable in an image - so the options are to leave the UA
+alone, or to accept the mismatch.
+
+To add packages (fonts or anything else) without editing the `Dockerfile`, use the
+`EXTRA_LINUX_PACKAGES` build arg - it is wired up in `docker-compose.yml`:
+
+```bash
+docker build -t sock:test --build-arg EXTRA_LINUX_PACKAGES="fonts-noto-extra fonts-indic" .
+```
+
+It installs in its own layer, so changing it does not re-download Chrome. It is a *build*
+setting rather than a runtime environment variable on purpose: the container runs unprivileged
+as the `chrome` user, so nothing inside it can `apt-get install` at startup.
+
+### No compiler in the image
+
+The Python dependencies are installed with `--only-binary=:all:`. There is no `gcc`, no
+`libc6-dev` and no `python3-dev` - that toolchain was 261MB of image for packages that all
+publish wheels. If a dependency bump ever needs to build from source the build fails there,
+loudly, rather than quietly wanting a compiler back.
+
+The one that did need one was `psutil`: 5.9.x has no `aarch64` wheel, so every arm64 build
+compiled it. Hence `psutil>=6,<8` in `requirements.txt`.
+
 ### Docker healthcheck
 
 Add this to your `docker-compose.yml`, it will check port 3000 answers and that the `/stats` endpoint on port 8080 responds

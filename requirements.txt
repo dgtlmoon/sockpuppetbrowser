@@ -1,6 +1,9 @@
 aiohttp~=3.9
 loguru~=0.7
-psutil~=5.9
+# 6.0 is the first release with an aarch64 wheel; on 5.9.x an arm64 build compiles psutil from
+# source, which is the only reason the image ever needed gcc. Only core API is used here
+# (Process, children(), kill(), virtual_memory, NoSuchProcess/AccessDenied) - unchanged in 6/7.
+psutil>=6,<8
 # Pinned: the code uses the legacy websockets API (WebSocketServerProtocol, two-arg handler).
 # websockets 14+ changes the handler signature, so an unpinned rebuild would break silently.
 websockets>=11,<12
