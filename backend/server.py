@@ -30,10 +30,13 @@ from loguru import logger
 
 from cdp_trace import CDPTracer
 from chrome import (DEFAULT_CHROME_BIN, ChromeInstance, ChromeStartupError,
-                    parse_query_args, sweep_orphans)
+                    parse_query_args, probe_chrome_version, sweep_orphans)
 from http_server import start_http_server
 
 stats = {
+    # Filled in once at startup by probe_chrome_version(); None until then, and if the probe
+    # fails it stays None and /stats reports "unknown".
+    'chrome_version': None,
     'confirmed_data_received': 0,
     'connection_count': 0,
     'connection_count_total': 0,
@@ -364,6 +367,8 @@ async def main(args):
     except Exception as e:
         logger.warning(f"Startup sweep of orphaned temp dirs failed, continuing anyway: {e}")
 
+    stats['chrome_version'] = await probe_chrome_version()
+
     await start_http_server(host=args.host, port=args.sport, stats=stats)
 
     # max_size=None to match the Chrome side; the 1MiB default silently killed connections
@@ -375,7 +380,8 @@ async def main(args):
                                 ping_timeout=WS_PING_TIMEOUT,
                                 close_timeout=WS_CLOSE_TIMEOUT):
         chrome_path = os.getenv("CHROME_BIN", DEFAULT_CHROME_BIN)
-        logger.success(f"Starting Chrome proxy, Listening on ws://{args.host}:{args.port} -> {chrome_path}")
+        logger.success(f"Starting Chrome proxy, Listening on ws://{args.host}:{args.port} -> "
+                       f"{chrome_path} ({stats['chrome_version'] or 'version unknown'})")
         poll = asyncio.create_task(stats_thread_func())
         try:
             await stop

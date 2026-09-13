@@ -4,6 +4,14 @@ services:
     build:
       context: .
       args:
+        # Which Google Chrome to install. "current" tracks whatever Chrome Stable is on the
+        # day you build; a deb version like "151.0.7922.173-1" pins it. Google's deb pool
+        # only keeps recent releases, so an old pin will 404 the build.
+        # Pin this if a Chrome update can break your scraping and you want to choose when to
+        # move; leave it on "current" to get security fixes on every rebuild.
+        # Whichever you set, `/stats` reports the version actually installed - it asks the
+        # browser, so "current" still tells you exactly what you got.
+        CHROME_VERSION: "current"
         # Extra Debian packages to bake into the image, space separated. Nothing needs to go
         # here for normal use - the image already ships Noto (CJK, emoji, core) so pages in
         # any script render instead of showing tofu boxes.

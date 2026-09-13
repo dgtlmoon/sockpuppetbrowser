@@ -46,6 +46,11 @@ async def handle_http_request(request, stats):
         data = {
             'active_connections': stats['connection_count'],
             'child_count': child_count,
+            # What the browser reports about itself, probed at startup. CHROME_VERSION is the
+            # build arg it was asked for - usually "current", so it says whether this image
+            # tracks Chrome Stable or is pinned, not what is installed.
+            'chrome_version': stats.get('chrome_version') or 'unknown',
+            'chrome_version_build_arg': os.getenv('CHROME_VERSION') or 'unknown',
             'connection_count_total': stats['connection_count_total'],
             'dropped_threshold_reached': stats['dropped_threshold_reached'],
             'dropped_waited_too_long': stats['dropped_waited_too_long'],
@@ -63,6 +68,7 @@ async def handle_http_request(request, stats):
         return web.json_response({
             'active_connections': stats['connection_count'],
             'connection_count_total': stats['connection_count_total'],
+            'chrome_version': stats.get('chrome_version') or 'unknown',
             'error': 'request_timeout'
         }, content_type='application/json')
     except Exception as e:

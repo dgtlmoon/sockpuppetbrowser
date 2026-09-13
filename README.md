@@ -108,6 +108,8 @@ Access `http://127.0.0.1:8080/stats` or which ever hostname you bind to, use `--
 {
   "active_connections": 21,
   "child_count": 21,
+  "chrome_version": "Google Chrome 153.0.8010.36",
+  "chrome_version_build_arg": "current",
   "connection_count_total": 467,
   "chrome_start_failures": 3,
   "cdp_connect_failures": 0,
@@ -120,12 +122,15 @@ Access `http://127.0.0.1:8080/stats` or which ever hostname you bind to, use `--
 ```
 
 Counters run for the life of the process and reset when the container restarts;
-`connection_count_total` is the denominator for the rest.
+`connection_count_total` is the denominator for the rest. `chrome_version` is not a counter -
+it is probed once at startup and also logged in the startup line.
 
 | Field | Meaning |
 |---|---|
 | `active_connections` | Connections being served right now. Should track the number of browser processes - if it does not, browsers are outliving their connections. |
 | `child_count` | Direct children of the proxy. Far above `active_connections` means processes are piling up: zombies, if the container is running without an init. |
+| `chrome_version` | What the browser binary reports about itself, e.g. `Google Chrome 153.0.8010.36` or `Chromium 119.0.6045.159 Alpine Linux`. Probed by running `$CHROME_BIN --version` once at startup, so it is the version actually installed - not what the build asked for. `unknown` means the probe failed, which usually means `CHROME_BIN` points at nothing; the log line above it says why. |
+| `chrome_version_build_arg` | The `CHROME_VERSION` build arg this image was built with: `current` if it tracks Chrome Stable, a deb version like `153.0.8010.36-1` if it is pinned. Use it to tell "this will move on the next rebuild" from "this is held". `unknown` on images that take no such arg, like `Dockerfile.chromium119`. |
 | `connection_count_total` | Connections accepted since start. |
 | `chrome_start_failures` | Chrome never came up - binary missing, exited during startup, or the profile was locked by another browser (exit code 21). |
 | `cdp_connect_failures` | Chrome came up and announced an endpoint, but was gone or unreachable when the proxy dialled it. |
@@ -345,10 +350,13 @@ because they do not behave identically. Chromium 119's old `--headless` has no
 `chrome.json`'s seccomp profile has to suit both musl and glibc. To test another version:
 
 ```bash
-docker build -t sock:test --build-arg CHROME_VERSION=151.0.7922.173-1 .   # or "current"
+docker build -t sock:test --build-arg CHROME_VERSION=153.0.8010.36-1 .   # or "current"
 ```
 
-Google's deb pool only keeps recent releases, so old pins will 404.
+Google's deb pool only keeps recent releases, so old pins will 404. `CHROME_VERSION` is also
+declared in `docker-compose.yml` under `build.args`, so a pin can live there instead of on the
+command line. Either way `/stats` reports the version that actually got installed - see
+[`chrome_version`](#statistics) - so you never have to guess what `current` resolved to.
 
 ### Fonts and fingerprinting
 

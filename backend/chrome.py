@@ -108,6 +108,44 @@ BENIGN_STDERR = (
 def _is_benign(line):
     return any(marker in line for marker in BENIGN_STDERR)
 
+
+async def probe_chrome_version(timeout=10):
+    """Ask the browser binary what it is, e.g. "Google Chrome 141.0.7390.65".
+
+    Deliberately probed from the binary rather than read off the CHROME_VERSION build arg:
+    that arg defaults to "current", which says nothing about what actually got installed, and
+    it is stale the moment someone mounts a different browser over /usr/bin or runs the proxy
+    off-container. Called once at startup - /stats must not fork a browser per request.
+
+    Returns None rather than raising: not knowing the version is never a reason to refuse to
+    start, and the caller reports it as "unknown".
+    """
+    chrome_location = os.getenv("CHROME_BIN", DEFAULT_CHROME_BIN)
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            chrome_location, '--version', stdout=PIPE, stderr=DEVNULL)
+    except (OSError, ValueError) as e:
+        logger.warning(f"Could not run '{chrome_location} --version': {e}")
+        return None
+
+    try:
+        stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=timeout)
+    except asyncio.TimeoutError:
+        logger.warning(f"'{chrome_location} --version' did not answer within {timeout}s")
+        try:
+            proc.kill()
+            await proc.wait()  # reap it, or it lingers as a zombie on our PID
+        except (ProcessLookupError, OSError):
+            pass
+        return None
+
+    version = stdout.decode('utf-8', errors='replace').strip()
+    if proc.returncode != 0 or not version:
+        logger.warning(f"'{chrome_location} --version' exited {proc.returncode} "
+                       f"with output {version!r}")
+        return None
+    return version
+
 XVFB_SCREEN_ARGS = (
     "-screen 0 1920x1080x24 -ac +extension GLX +extension RANDR +extension RENDER "
     "+extension DAMAGE +extension XINERAMA +extension MIT-SHM +extension XTEST "

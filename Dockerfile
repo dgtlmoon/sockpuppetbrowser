@@ -79,6 +79,11 @@ WORKDIR /usr/src/app
 ENV CHROME_BIN=/usr/bin/google-chrome-stable \
     CHROME_PATH=/opt/google/chrome/
 
+# Carry the build arg into the image so `docker inspect` and /stats can report whether this
+# image tracks Chrome Stable ("current") or is pinned. It is not the installed version -
+# /stats probes the binary itself for that, see probe_chrome_version().
+ENV CHROME_VERSION=${CHROME_VERSION}
+
 #ENV CHROMIUM_FLAGS="--disable-software-rasterizer --disable-dev-shm-usage"
 
 # --only-binary: the image carries no compiler, by design (gcc + libc6-dev + python3-dev cost
