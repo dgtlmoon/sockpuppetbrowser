@@ -25,15 +25,15 @@ jobs:
     name: ${{ inputs.label }}
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@v4
 
       # amd64 only and load=true: the tests need the image in the runner's local docker, and
       # nothing here is architecture-specific. The multi-arch build stays in container-publish.
       - name: Build the container
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: ./
           file: ${{ inputs.dockerfile }}
@@ -72,7 +72,7 @@ jobs:
           docker logs sockpuppet-test
           exit 1
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         with:
           python-version: '3.12'
 
@@ -141,7 +141,7 @@ jobs:
 
       - name: Upload screenshots, page dumps and logs
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: container-test-${{ inputs.label }}
           path: pyppeteer-tests/artifacts/
