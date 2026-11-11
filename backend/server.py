@@ -3,21 +3,6 @@
 # Auto scaling websocket proxy for Chrome CDP
 
 
-def strtobool(val):
-    """Convert a string representation of truth to true (1) or false (0).
-
-    True values are 'y', 'yes', 't', 'true', 'on', and '1'; false values
-    are 'n', 'no', 'f', 'false', 'off', and '0'.
-    """
-    val = val.lower()
-    if val in ('y', 'yes', 't', 'true', 'on', '1'):
-        return True
-    elif val in ('n', 'no', 'f', 'false', 'off', '0'):
-        return False
-    else:
-        raise ValueError(f"invalid truth value {val!r}")
-
-
 import argparse
 import asyncio
 import os
@@ -33,6 +18,7 @@ from cdp_trace import CDPTracer
 from chrome import (DEFAULT_CHROME_BIN, ChromeInstance, ChromeStartupError,
                     parse_query_args, probe_chrome_version, sweep_orphans)
 from http_server import start_http_server
+from strtobool import strtobool
 
 # CPython launches Chrome with vfork() when it can. While the child is between vfork() and
 # exec(), it shares the parent's memory, and with the executor threads busy (psutil, log

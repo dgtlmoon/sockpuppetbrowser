@@ -29,6 +29,8 @@ from urllib.parse import parse_qs, urlparse
 import psutil
 from loguru import logger
 
+from strtobool import strtobool
+
 # "DevTools listening on ws://127.0.0.1:36743/devtools/browser/9cc0662e-..."
 DEVTOOLS_RE = re.compile(r'DevTools listening on (ws://\S+)')
 
@@ -60,20 +62,13 @@ TEMP_ROOT = os.getenv('SOCKPUPPET_TEMP_ROOT', tempfile.gettempdir() if WINDOWS e
 # path to two connections at once make the second Chrome exit with code 21 (profile in use), and
 # per-client paths are never cleaned up, so they pile up on the tmpfs. Enforced here, it no
 # longer depends on every client being configured right.
-def _env_bool(name, default):
-    value = os.getenv(name)
-    if value is None or not value.strip():
-        return default
-    return value.strip().lower() in ('1', 'true', 'yes', 'on')
-
-
-IGNORE_USER_DATA_DIR = _env_bool('IGNORE_USER_DATA_DIR', False)
+IGNORE_USER_DATA_DIR = strtobool(os.getenv('IGNORE_USER_DATA_DIR', 'False'))
 
 # --disable-remote-fonts stops pages downloading their @font-face web fonts - less bandwidth and
 # faster page loads, but icon fonts (Font Awesome and friends) then render as tofu boxes in
 # screenshots. Set false to let Chrome load web fonts.
 # https://github.com/dgtlmoon/sockpuppetbrowser/issues/66
-CHROME_DISABLE_REMOTE_FONTS = _env_bool('CHROME_DISABLE_REMOTE_FONTS', True)
+CHROME_DISABLE_REMOTE_FONTS = strtobool(os.getenv('CHROME_DISABLE_REMOTE_FONTS', 'True'))
 
 # Prefix of the one dir we create per browser. Both the profile and Chrome's own TMPDIR live
 # inside it, so a single rmtree at teardown gets everything Chrome put in temp.
