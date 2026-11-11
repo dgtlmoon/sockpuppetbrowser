@@ -174,6 +174,7 @@ You can also add this to your fetch and access `'special_counter_len'` at the `/
 | `WS_CLOSE_TIMEOUT` | `5` | Seconds to wait for a client's closing handshake before dropping the connection. |
 | `CDP_QUIET_SESSION_BYTES` | `100` | A session relaying fewer bytes than this counts as `quiet_sessions` in `/stats`. `0` disables the check. |
 | `SOCKPUPPET_TEMP_ROOT` | `/tmp` | Where each browser's scratch dir (profile + Chrome's own `TMPDIR`) is created. |
+| `CHROME_DISABLE_REMOTE_FONTS` | `true` | Start Chrome with `--disable-remote-fonts`, so pages' `@font-face` web fonts are not downloaded. `false` loads them - needed for icon fonts in screenshots. See [Fonts and fingerprinting](#fonts-and-fingerprinting). |
 | `IGNORE_USER_DATA_DIR` | `false` | `true` drops any `--user-data-dir` the client sends, so every connection gets a throwaway profile. See [Profile directories](#profile-directories---user-data-dir). |
 | `SOCKPUPPET_SWEEP_MIN_AGE` | `300` | Seconds before an unclaimed scratch dir or X lock is treated as an orphan. |
 | `SOCKPUPPET_X_DISPLAY_FLOOR` | `99` | Lowest X display the orphan sweep will release; below this is assumed to be someone else's. |
@@ -389,6 +390,13 @@ One inconsistency worth knowing about: if you spoof a Windows `User-Agent`, a Li
 contradicts it, and that mismatch is itself checkable. Matching it properly means Microsoft's
 core fonts, which are not redistributable in an image - so the options are to leave the UA
 alone, or to accept the mismatch.
+
+**Web fonts are off by default.** Chrome starts with `--disable-remote-fonts`, so a page's own
+`@font-face` fonts are never downloaded and text falls back to the system fonts above. That saves
+bandwidth and load time, and text content is unaffected - but **icon fonts** (Font Awesome,
+Material Icons and the like) have no system fallback and render as tofu boxes (`□`) in
+screenshots. Set `CHROME_DISABLE_REMOTE_FONTS=false` to let Chrome load web fonts, at the cost of a few more
+requests per page ([#66](https://github.com/dgtlmoon/sockpuppetbrowser/issues/66)).
 
 To add packages (fonts or anything else) without editing the `Dockerfile`, use the
 `EXTRA_LINUX_PACKAGES` build arg - it is wired up in `docker-compose.yml`:

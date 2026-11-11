@@ -60,7 +60,20 @@ TEMP_ROOT = os.getenv('SOCKPUPPET_TEMP_ROOT', tempfile.gettempdir() if WINDOWS e
 # path to two connections at once make the second Chrome exit with code 21 (profile in use), and
 # per-client paths are never cleaned up, so they pile up on the tmpfs. Enforced here, it no
 # longer depends on every client being configured right.
-IGNORE_USER_DATA_DIR = os.getenv('IGNORE_USER_DATA_DIR', 'false').strip().lower() in ('1', 'true', 'yes', 'on')
+def _env_bool(name, default):
+    value = os.getenv(name)
+    if value is None or not value.strip():
+        return default
+    return value.strip().lower() in ('1', 'true', 'yes', 'on')
+
+
+IGNORE_USER_DATA_DIR = _env_bool('IGNORE_USER_DATA_DIR', False)
+
+# --disable-remote-fonts stops pages downloading their @font-face web fonts - less bandwidth and
+# faster page loads, but icon fonts (Font Awesome and friends) then render as tofu boxes in
+# screenshots. Set false to let Chrome load web fonts.
+# https://github.com/dgtlmoon/sockpuppetbrowser/issues/66
+CHROME_DISABLE_REMOTE_FONTS = _env_bool('CHROME_DISABLE_REMOTE_FONTS', True)
 
 # Prefix of the one dir we create per browser. Both the profile and Chrome's own TMPDIR live
 # inside it, so a single rmtree at teardown gets everything Chrome put in temp.
@@ -201,7 +214,7 @@ def build_chrome_args(chrome_flags, headful=False):
         "--disable-ipc-flooding-protection",
         "--disable-popup-blocking",
         "--disable-prompt-on-repost",
-        "--disable-remote-fonts",
+        "--disable-remote-fonts",  # unless CHROME_DISABLE_REMOTE_FONTS=false, see below
         "--disable-renderer-backgrounding",
         "--disable-search-engine-choice-screen",
         "--disable-sync",
@@ -225,6 +238,9 @@ def build_chrome_args(chrome_flags, headful=False):
         "--remote-debugging-port=0",
         "about:blank",
     ]
+
+    if not CHROME_DISABLE_REMOTE_FONTS:
+        chrome_run.remove("--disable-remote-fonts")
 
     if not headful:
         chrome_run.append("--headless")
