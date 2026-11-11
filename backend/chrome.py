@@ -55,6 +55,13 @@ DEFAULT_CHROME_BIN = (r'C:\Program Files\Google\Chrome\Application\chrome.exe' i
 # off-container, whatever the platform calls its temp dir.
 TEMP_ROOT = os.getenv('SOCKPUPPET_TEMP_ROOT', tempfile.gettempdir() if WINDOWS else '/tmp')
 
+# Drop any --user-data-dir the client puts on the connection URL, so every connection gets the
+# throwaway per-connection profile. For shared/multi-tenant pools: clients that hand out the same
+# path to two connections at once make the second Chrome exit with code 21 (profile in use), and
+# per-client paths are never cleaned up, so they pile up on the tmpfs. Enforced here, it no
+# longer depends on every client being configured right.
+IGNORE_USER_DATA_DIR = os.getenv('IGNORE_USER_DATA_DIR', 'false').strip().lower() in ('1', 'true', 'yes', 'on')
+
 # Prefix of the one dir we create per browser. Both the profile and Chrome's own TMPDIR live
 # inside it, so a single rmtree at teardown gets everything Chrome put in temp.
 TEMP_DIR_PREFIX = 'chrome-puppeteer-proxy'
@@ -238,6 +245,12 @@ def build_chrome_args(chrome_flags, headful=False):
                      "--enable-blink-features=IdleDetection"):
             if flag in chrome_run:
                 chrome_run.remove(flag)
+
+    if IGNORE_USER_DATA_DIR:
+        ignored = [f for f in chrome_flags if f.split('=', 1)[0] == '--user-data-dir']
+        if ignored:
+            logger.debug(f"IGNORE_USER_DATA_DIR is set, ignoring client supplied {', '.join(ignored)} - using a throwaway profile")
+            chrome_flags = [f for f in chrome_flags if f.split('=', 1)[0] != '--user-data-dir']
 
     chrome_run += chrome_flags
 

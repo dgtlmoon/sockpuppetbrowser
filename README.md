@@ -174,6 +174,7 @@ You can also add this to your fetch and access `'special_counter_len'` at the `/
 | `WS_CLOSE_TIMEOUT` | `5` | Seconds to wait for a client's closing handshake before dropping the connection. |
 | `CDP_QUIET_SESSION_BYTES` | `100` | A session relaying fewer bytes than this counts as `quiet_sessions` in `/stats`. `0` disables the check. |
 | `SOCKPUPPET_TEMP_ROOT` | `/tmp` | Where each browser's scratch dir (profile + Chrome's own `TMPDIR`) is created. |
+| `IGNORE_USER_DATA_DIR` | `false` | `true` drops any `--user-data-dir` the client sends, so every connection gets a throwaway profile. See [Profile directories](#profile-directories---user-data-dir). |
 | `SOCKPUPPET_SWEEP_MIN_AGE` | `300` | Seconds before an unclaimed scratch dir or X lock is treated as an orphan. |
 | `SOCKPUPPET_X_DISPLAY_FLOOR` | `99` | Lowest X display the orphan sweep will release; below this is assumed to be someone else's. |
 | `LOG_LEVEL` | `DEBUG` | `TRACE`, `DEBUG`, `INFO`, `SUCCESS`, `WARNING`, `ERROR`, `CRITICAL`. |
@@ -294,6 +295,13 @@ So only pass `--user-data-dir` when you need the profile to persist, and reuse a
 paths rather than one per watch. A profile serves **one connection at a time** - two at once
 and the second Chrome exits with code 21 (`The profile appears to be in use...`) - so size that
 set to your concurrency.
+
+On a shared pool you can take the choice away from the clients: `IGNORE_USER_DATA_DIR=true`
+drops any `--user-data-dir` on the connection URL (logged at DEBUG) and every connection gets
+the throwaway profile, as if none had been passed. Use it when you don't control every client's
+configuration - for example several clients built from one template, all sending the same path,
+which would otherwise turn into a stream of exit code 21 start failures whenever two of them
+overlap. Logins and cookies then don't carry over between connections.
 
 Sessions do survive a reused profile: on teardown the proxy SIGHUPs Chrome and gives it up to
 `CHROME_SHUTDOWN_GRACE` seconds to exit on its own, which is what makes it flush its cookie
