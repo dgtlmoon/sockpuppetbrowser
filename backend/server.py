@@ -22,6 +22,7 @@ import argparse
 import asyncio
 import os
 import signal
+import subprocess
 import sys
 import time
 
@@ -32,6 +33,17 @@ from cdp_trace import CDPTracer
 from chrome import (DEFAULT_CHROME_BIN, ChromeInstance, ChromeStartupError,
                     parse_query_args, probe_chrome_version, sweep_orphans)
 from http_server import start_http_server
+
+# CPython launches Chrome with vfork() when it can. While the child is between vfork() and
+# exec(), it shares the parent's memory, and with the executor threads busy (psutil, log
+# writes, sweeps) that is the suspected cause of the whole proxy aborting with "The futex facility
+# returned an unexpected error code" - taking every running browser with it. Plain fork()
+# avoids that and costs nothing noticeable (Chrome still starts in ~0.4s under load).
+# subprocess._USE_VFORK is a private CPython switch that exists in 3.11 - 3.13 only; on other
+# versions this does nothing and a warning is logged at startup.
+DISABLE_VFORK = strtobool(os.getenv('DISABLE_VFORK', 'True'))
+if DISABLE_VFORK and hasattr(subprocess, '_USE_VFORK'):
+    subprocess._USE_VFORK = False
 
 stats = {
     # Filled in once at startup by probe_chrome_version(); None until then, and if the probe
@@ -382,6 +394,12 @@ async def main(args):
         chrome_path = os.getenv("CHROME_BIN", DEFAULT_CHROME_BIN)
         logger.success(f"Starting Chrome proxy, Listening on ws://{args.host}:{args.port} -> "
                        f"{chrome_path} ({stats['chrome_version'] or 'version unknown'})")
+        if not hasattr(subprocess, '_USE_VFORK'):
+            logger.warning(f"DISABLE_VFORK={DISABLE_VFORK} has no effect: this Python ({sys.version.split()[0]}) "
+                           f"has no subprocess._USE_VFORK switch (it exists in 3.11 - 3.13)")
+        else:
+            logger.info(f"Chrome is launched with {'vfork()' if subprocess._USE_VFORK else 'fork()'} "
+                        f"(DISABLE_VFORK={DISABLE_VFORK})")
         poll = asyncio.create_task(stats_thread_func())
         try:
             await stop
