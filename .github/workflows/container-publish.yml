@@ -6,6 +6,9 @@ on:
       - master
   release:
     types: [published, edited]
+  # Manual re-run from the Actions tab or `gh workflow run container-publish.yml`, e.g. when a
+  # push-triggered run gets stuck on GitHub's side.
+  workflow_dispatch:
     
 jobs:
 
