@@ -1,0 +1,118 @@
+FROM debian:bookworm-slim
+LABEL org.opencontainers.image.source="https://github.com/dgtlmoon/sockpuppetbrowser"
+
+# Same proxy as ./Dockerfile, but the browser is chrome-headless-shell from Chrome for Testing
+# instead of the full google-chrome-stable package.
+#
+# chrome-headless-shell is the old headless mode split out into its own binary: no browser UI
+# behind the scenes (no omnibox popup, no tab strip WebUI), no component extensions, no GTK.
+# It should start faster and use less memory and CPU per browser, which is what a pool of a
+# hundred or more short-lived browsers is paying for - measure it on your own load. It cannot run headful, so CHROME_HEADFUL is not
+# supported with this image.
+#
+# Its rendering and fingerprint are not identical to full Chrome in --headless mode, so test
+# it against the sites you care about before switching a pool over.
+#
+# docker build -f Dockerfile.chrome-headless-shell -t sockpuppetbrowser:headless-shell .
+
+ENV PYTHONUNBUFFERED=1
+ENV LOG_LEVEL=DEBUG
+ARG TARGETARCH
+# A Chrome for Testing version like 157.0.8103.78, or "current" for whatever Chrome for Testing
+# lists as Stable today. https://googlechromelabs.github.io/chrome-for-testing/
+ARG CHROME_VERSION=current
+# Extra Debian packages to bake in, space separated. See "Fonts and fingerprinting" in the
+# README before adding fonts here.
+ARG EXTRA_LINUX_PACKAGES=""
+
+# The runtime libraries are what the chrome-headless-shell binary actually links against
+# (objdump -p | grep NEEDED), not the zip's deb.deps - that file is shared with full Chrome and
+# pulls in GTK, Cairo, CUPS and friends, none of which the shell loads. The ldd check at the end
+# fails the build if a new Chrome starts needing something that is not installed.
+RUN set -eux; \
+	apt-get update; \
+	apt-get install -y --no-install-recommends \
+		ca-certificates \
+		fonts-liberation \
+		fonts-noto-cjk \
+		fonts-noto-color-emoji \
+		fonts-noto-core \
+		libasound2 \
+		libatk-bridge2.0-0 \
+		libatk1.0-0 \
+		libatspi2.0-0 \
+		libdbus-1-3 \
+		libexpat1 \
+		libgbm1 \
+		libglib2.0-0 \
+		libnspr4 \
+		libnss3 \
+		libudev1 \
+		libvulkan1 \
+		libx11-6 \
+		libxcb1 \
+		libxcomposite1 \
+		libxdamage1 \
+		libxext6 \
+		libxfixes3 \
+		libxkbcommon0 \
+		libxrandr2 \
+		python3 \
+		python3-venv \
+		tini; \
+	apt-get install -y --no-install-recommends curl unzip; \
+	chrome_arch="${TARGETARCH:-$(dpkg --print-architecture)}"; \
+	case "$chrome_arch" in \
+		amd64) cft_platform=linux64 ;; \
+		arm64) cft_platform=linux-arm64 ;; \
+		*) echo "Unsupported architecture: $chrome_arch" >&2; exit 1 ;; \
+	esac; \
+	case "$CHROME_VERSION" in \
+		current|latest) \
+			cft_version="$(curl -fsSL https://googlechromelabs.github.io/chrome-for-testing/last-known-good-versions.json \
+				| python3 -c 'import json, sys; print(json.load(sys.stdin)["channels"]["Stable"]["version"])')" ;; \
+		*) cft_version="$CHROME_VERSION" ;; \
+	esac; \
+	curl -fsSL "https://storage.googleapis.com/chrome-for-testing-public/${cft_version}/${cft_platform}/chrome-headless-shell-${cft_platform}.zip" \
+		-o /tmp/chrome-headless-shell.zip; \
+	unzip -q /tmp/chrome-headless-shell.zip -d /opt; \
+	mv "/opt/chrome-headless-shell-${cft_platform}" /opt/chrome-headless-shell; \
+	rm -f /tmp/chrome-headless-shell.zip; \
+	ln -s /opt/chrome-headless-shell/chrome-headless-shell /usr/bin/chrome-headless-shell; \
+	if ldd /opt/chrome-headless-shell/chrome-headless-shell | grep 'not found'; then \
+		echo "chrome-headless-shell ${cft_version} needs libraries that are not installed (above)" >&2; exit 1; \
+	fi; \
+	chrome-headless-shell --version; \
+	apt-get purge -y --auto-remove curl unzip; \
+	rm -rf /var/lib/apt/lists/*; \
+	useradd --create-home --shell /bin/bash chrome
+
+RUN set -eux; \
+	if [ -n "${EXTRA_LINUX_PACKAGES}" ]; then \
+		apt-get update; \
+		apt-get install -y --no-install-recommends ${EXTRA_LINUX_PACKAGES}; \
+		rm -rf /var/lib/apt/lists/*; \
+	fi
+
+COPY entrypoint.sh /usr/local/bin/entrypoint.sh
+RUN chmod +x /usr/local/bin/entrypoint.sh && \
+    mkdir -p /usr/src/app && \
+    chown chrome:chrome /usr/src/app
+
+USER chrome
+
+COPY --chown=chrome:chrome requirements.txt /usr/src/app/requirements.txt
+COPY --chown=chrome:chrome backend/* /usr/src/app/
+COPY --chown=chrome:chrome chrome.json /usr/src/app/
+
+WORKDIR /usr/src/app
+
+ENV CHROME_BIN=/usr/bin/chrome-headless-shell \
+    CHROME_PATH=/opt/chrome-headless-shell/
+
+# Not the installed version - /stats probes the binary itself for that.
+ENV CHROME_VERSION=${CHROME_VERSION}
+
+RUN python3 -m venv . && . ./bin/activate && \
+    ./bin/pip3 install --no-cache-dir --only-binary=:all: -r requirements.txt
+CMD ["/usr/local/bin/entrypoint.sh"]

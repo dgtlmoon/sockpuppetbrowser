@@ -169,6 +169,17 @@ XVFB_SCREEN_ARGS = (
 )
 
 
+def chrome_is_headless_only(chrome_location=None):
+    """True when CHROME_BIN is chrome-headless-shell, which has no headful mode at all.
+
+    Judged by the name (through any symlink), not by running it - this is asked once per
+    connection that wants headful.
+    """
+    chrome_location = chrome_location or os.getenv("CHROME_BIN", DEFAULT_CHROME_BIN)
+    names = {os.path.basename(chrome_location), os.path.basename(os.path.realpath(chrome_location))}
+    return any(n.lower().startswith('chrome-headless-shell') for n in names)
+
+
 def parse_query_args(query):
     """Split a connection query string into Chrome flags (--foo) and proxy options (bar).
 

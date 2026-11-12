@@ -100,6 +100,29 @@ docker run --rm --init -e CHROME_HEADFUL=true --security-opt seccomp=$(pwd)/chro
 - Headless mode: ~150+ concurrent browsers per 16-core CPU
 - Headful mode: Slightly higher memory usage due to Xvfb processes, but still scales well
 
+### chrome-headless-shell image (experimental)
+
+`dgtlmoon/sockpuppetbrowser:chrome-headless-shell` is the same proxy with
+[chrome-headless-shell](https://developer.chrome.com/blog/chrome-headless-shell) from Chrome for
+Testing in place of the full `google-chrome-stable`, built from `Dockerfile.chrome-headless-shell`.
+
+Full Chrome in `--headless` mode still builds its whole browser UI behind the scenes - the omnibox
+popup, built-in extensions and so on show up as extra targets in a CDP trace. The headless shell
+has none of that, so it should start faster and use less memory and CPU per browser - measure
+it on your own load before relying on that. The image is about half the size (~620MB vs ~1.2GB).
+
+Things to know before switching a pool over:
+
+- **No headful mode.** `headful=true` and `CHROME_HEADFUL=true` are ignored with a warning and the
+  connection runs headless instead of failing.
+- **It is not byte-for-byte the same browser.** Rendering and fingerprint can differ from full
+  Chrome; check the sites you care about, and how often you get blocked, before and after.
+- `CHROME_VERSION` takes a Chrome for Testing version (e.g. `157.0.8103.78`) or `current`.
+
+```bash
+docker build -f Dockerfile.chrome-headless-shell -t sockpuppetbrowser:chrome-headless-shell .
+```
+
 ### Statistics
 
 Access `http://127.0.0.1:8080/stats` or which ever hostname you bind to, use `--sport` to specify something other than `8080`
