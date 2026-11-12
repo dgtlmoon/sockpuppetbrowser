@@ -136,12 +136,37 @@ restarts or Chrome start failures in any run.
 
 One page on one machine - real traffic is a mix of sites, so measure on your own load too.
 
-Things to know before switching a pool over:
+**Faster, but easier to spot as a bot.** Same rendering engine, so pages, web fonts (with
+`CHROME_DISABLE_REMOTE_FONTS=false`), codecs (H.264/AAC/VP9/AV1) and WebGL behave the same. What
+differs is what the browser reports about itself, measured on both images:
+
+| Check | `:latest` (full Chrome) | `:chrome-headless-shell` |
+|---|---|---|
+| `window.chrome` | present | **missing** |
+| `navigator.plugins` | 5 PDF viewer plugins | **empty** |
+| `navigator.pdfViewerEnabled` | `true` | **`false`** |
+| `Notification.permission` | `"default"` | **`"denied"`** |
+| `navigator.userAgentData` brand | "Google Chrome" | **"HeadlessChrome"** |
+| User-Agent version | `157.0.0.0` (reduced, like normal Chrome) | **`157.0.8103.78`** (full) |
+| `navigator.languages` | `en-US, en` | `en-US` |
+| Navigating to a PDF | loads (HTTP 200) | **`net::ERR_ABORTED`** |
+
+- **Bot detection is the big risk.** A missing `window.chrome`, no plugins and notifications
+  "denied" are long-standing headless giveaways that Cloudflare, DataDome and friends check for,
+  so sites behind them will likely block the shell more often than full Chrome.
+  - Both images put "HeadlessChrome" in the User-Agent string, so a client that sets its own
+    User-Agent hides that either way - but the shell's `navigator.userAgentData` brand still
+    says "HeadlessChrome".
+- **PDFs fail.** The shell has no PDF viewer, so loading a PDF URL in the browser aborts.
+- **Patching is possible but endless.** A fake `window.chrome`, plugins etc. can be injected
+  before each page loads, but that is cat-and-mouse; full Chrome passes these checks as is.
+
+Compare block and error rates on your own traffic before switching a pool over.
+
+Also:
 
 - **No headful mode.** `headful=true` and `CHROME_HEADFUL=true` are ignored with a warning and the
   connection runs headless instead of failing.
-- **It is not byte-for-byte the same browser.** Rendering and fingerprint can differ from full
-  Chrome; check the sites you care about, and how often you get blocked, before and after.
 - `CHROME_VERSION` takes a Chrome for Testing version (e.g. `157.0.8103.78`) or `current`.
 
 ```bash
