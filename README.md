@@ -163,6 +163,23 @@ differs is what the browser reports about itself, measured on both images:
 
 Compare block and error rates on your own traffic before switching a pool over.
 
+**Can a page tell it is being driven over CDP?** This part is the same for both images - it
+depends on the client library, not the browser. Checked with a test page on Chrome 157 through
+Playwright 1.65 (`connect_over_cdp`, as changedetection.io connects), pyppeteer-ng 2.0, and a bare
+CDP client as baseline:
+
+| Giveaway | Result |
+|---|---|
+| `navigator.webdriver` | `false` for every client - the proxy omits `--enable-automation` and sets `--disable-blink-features=AutomationControlled` |
+| `window.cdc_*` variables | not present - those come from Selenium's ChromeDriver, which is not involved |
+| Helper globals on `window` (`__playwright*`, `__pw*`, `*puppeteer*`) | none found |
+| `Runtime.enable` leak (`console.debug()` of an `Error` with a `stack` getter, or of a `Proxy` with an `ownKeys` trap) | did **not** trigger for any client, including a bare CDP client that enables `Runtime` on purpose - these two published variants no longer work in Chrome 157 (others may exist) |
+| Stack traces of code the client runs in the page | **visible**: Playwright's `page.evaluate()` shows up as `UtilityScript.evaluate`, pyppeteer's as `__pyppeteer_evaluation_script__`. A page that wraps a getter the client touches (e.g. `document.title`) can read these |
+
+So the stack trace is the giveaway left at the protocol level, and only for code the client
+runs in the page's own context. Clients like `patchright` / `rebrowser-patches` work on exactly
+this - a change on the client side, since the proxy only passes CDP through.
+
 Also:
 
 - **No headful mode.** `headful=true` and `CHROME_HEADFUL=true` are ignored with a warning and the
