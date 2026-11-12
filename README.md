@@ -108,8 +108,33 @@ Testing in place of the full `google-chrome-stable`, built from `Dockerfile.chro
 
 Full Chrome in `--headless` mode still builds its whole browser UI behind the scenes - the omnibox
 popup, built-in extensions and so on show up as extra targets in a CDP trace. The headless shell
-has none of that, so it should start faster and use less memory and CPU per browser - measure
-it on your own load before relying on that. The image is about half the size (~620MB vs ~1.2GB).
+has none of that, so it starts faster and uses less memory and CPU per browser. The image is
+about half the size (~620MB vs ~1.2GB).
+
+Benchmark, `:latest` (Chrome 157 full, `--headless`) against `:chrome-headless-shell` (Chrome for
+Testing 157): a fixed number of clients fetch https://changedetection.io back to back for 2
+minutes, each fetch a fresh browser + page load + full-page JPEG screenshot. 16 thread laptop,
+container limited to 10GB, both images CPU-bound (~13 of 16 threads busy). Each figure is the
+mean of two runs (order latest, shell, shell, latest); runs agreed within 1-8%. No errors,
+restarts or Chrome start failures in any run.
+
+| 12 concurrent | `:latest` | `:chrome-headless-shell` | |
+|---|---|---|---|
+| Fetches per minute | 255 | **397** | +56% |
+| CPU seconds per fetch | 3.13 | **1.74** | -44% |
+| Fetch time, median / p95 | 2.78s / 3.08s | **1.77s / 2.05s** | -36% |
+| Browser start (connect) median | 0.48s | **0.09s** | 5x faster |
+| Peak memory per browser | 272MB | **169MB** | -38% |
+
+| 30 concurrent | `:latest` | `:chrome-headless-shell` | |
+|---|---|---|---|
+| Fetches per minute | 232 | **428** | +85% |
+| CPU seconds per fetch | 3.44 | **1.88** | -45% |
+| Fetch time, median / p95 | 7.26s / 9.16s | **4.05s / 4.95s** | -44% |
+| Browser start (connect) median | 1.51s | **0.35s** | 4x faster |
+| Peak memory per browser | 259MB | **152MB** | -41% |
+
+One page on one machine - real traffic is a mix of sites, so measure on your own load too.
 
 Things to know before switching a pool over:
 

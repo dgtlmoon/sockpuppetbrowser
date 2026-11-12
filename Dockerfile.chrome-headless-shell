@@ -6,8 +6,7 @@ LABEL org.opencontainers.image.source="https://github.com/dgtlmoon/sockpuppetbro
 #
 # chrome-headless-shell is the old headless mode split out into its own binary: no browser UI
 # behind the scenes (no omnibox popup, no tab strip WebUI), no component extensions, no GTK.
-# It should start faster and use less memory and CPU per browser, which is what a pool of a
-# hundred or more short-lived browsers is paying for - measure it on your own load. It cannot run headful, so CHROME_HEADFUL is not
+# It starts faster and uses less memory and CPU per browser - see the benchmark in the README. It cannot run headful, so CHROME_HEADFUL is not
 # supported with this image.
 #
 # Its rendering and fingerprint are not identical to full Chrome in --headless mode, so test
