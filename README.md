@@ -104,14 +104,47 @@ docker run --rm --init -e CHROME_HEADFUL=true --security-opt seccomp=$(pwd)/chro
 
 Access `http://127.0.0.1:8080/stats` or which ever hostname you bind to, use `--sport` to specify something other than `8080`
 
-```
+```json
 {
-  "active_connections": 158,
-  "connection_count_total": 8383,
-  "mem_use_percent": 46.9,
+  "active_connections": 21,
+  "child_count": 21,
+  "chrome_version": "Google Chrome 153.0.8010.36",
+  "chrome_version_build_arg": "current",
+  "connection_count_total": 467,
+  "chrome_start_failures": 3,
+  "cdp_connect_failures": 0,
+  "quiet_sessions": 1,
+  "dropped_threshold_reached": 0,
+  "dropped_waited_too_long": 0,
+  "mem_use_percent": 17.7,
   "special_counter_len": 0
 }
 ```
+
+Counters run for the life of the process and reset when the container restarts;
+`connection_count_total` is the denominator for the rest. `chrome_version` is not a counter -
+it is probed once at startup and also logged in the startup line.
+
+| Field | Meaning |
+|---|---|
+| `active_connections` | Connections being served right now. Should track the number of browser processes - if it does not, browsers are outliving their connections. |
+| `child_count` | Direct children of the proxy. Far above `active_connections` means processes are piling up: zombies, if the container is running without an init. |
+| `chrome_version` | What the browser binary reports about itself, e.g. `Google Chrome 153.0.8010.36` or `Chromium 119.0.6045.159 Alpine Linux`. Probed by running `$CHROME_BIN --version` once at startup, so it is the version actually installed - not what the build asked for. `unknown` means the probe failed, which usually means `CHROME_BIN` points at nothing; the log line above it says why. |
+| `chrome_version_build_arg` | The `CHROME_VERSION` build arg this image was built with: `current` if it tracks Chrome Stable, a deb version like `153.0.8010.36-1` if it is pinned. Use it to tell "this will move on the next rebuild" from "this is held". `unknown` on images that take no such arg, like `Dockerfile.chromium119`. |
+| `connection_count_total` | Connections accepted since start. |
+| `chrome_start_failures` | Chrome never came up - binary missing, exited during startup, or the profile was locked by another browser (exit code 21). |
+| `cdp_connect_failures` | Chrome came up and announced an endpoint, but was gone or unreachable when the proxy dialled it. |
+| `quiet_sessions` | Attached fine, then relayed less than `CDP_QUIET_SESSION_BYTES` - the client connected and did nothing with the browser. |
+| `dropped_threshold_reached` | Refused at capacity, with `DROP_EXCESS_CONNECTIONS=True`. |
+| `dropped_waited_too_long` | Queued for a slot and gave up after `CONNECTION_QUEUE_TIMEOUT`. |
+| `mem_use_percent` | System memory in use. |
+| `special_counter_len` | See below. |
+
+The three failure counters are mutually exclusive, so
+`(chrome_start_failures + cdp_connect_failures) / connection_count_total` is a launch failure
+rate worth alerting on. Failures *during* a session are not counted here - those appear in the
+teardown summary in the log, which also reports how many bytes were relayed each way. See
+[Diagnosing a dead CDP session](#diagnosing-a-dead-cdp-session).
 
 You can also add this to your fetch and access `'special_counter_len'` at the `/stats` URL, this is good for adding at the end of your scripts so you know the actual script ran all steps.
 
@@ -139,7 +172,11 @@ You can also add this to your fetch and access `'special_counter_len'` at the `/
 | `WS_PING_TIMEOUT` | `20` | Seconds to wait for a pong before dropping the connection. |
 | `WS_MAX_QUEUE` | `128` | Per-connection receive queue depth (backpressure). |
 | `WS_CLOSE_TIMEOUT` | `5` | Seconds to wait for a client's closing handshake before dropping the connection. |
+| `CDP_QUIET_SESSION_BYTES` | `100` | A session relaying fewer bytes than this counts as `quiet_sessions` in `/stats`. `0` disables the check. |
 | `SOCKPUPPET_TEMP_ROOT` | `/tmp` | Where each browser's scratch dir (profile + Chrome's own `TMPDIR`) is created. |
+| `CHROME_DISABLE_REMOTE_FONTS` | `true` | Start Chrome with `--disable-remote-fonts`, so pages' `@font-face` web fonts are not downloaded. `false` loads them - needed for icon fonts in screenshots. See [Fonts and fingerprinting](#fonts-and-fingerprinting). |
+| `IGNORE_USER_DATA_DIR` | `false` | `true` drops any `--user-data-dir` the client sends, so every connection gets a throwaway profile. See [Profile directories](#profile-directories---user-data-dir). |
+| `DISABLE_VFORK` | `true` | Launch Chrome with `fork()` instead of `vfork()`. Under heavy load `vfork()` is the suspected cause of the whole proxy aborting with *"The futex facility returned an unexpected error code"*, dropping every connected browser. `false` restores Python's default. |
 | `SOCKPUPPET_SWEEP_MIN_AGE` | `300` | Seconds before an unclaimed scratch dir or X lock is treated as an orphan. |
 | `SOCKPUPPET_X_DISPLAY_FLOOR` | `99` | Lowest X display the orphan sweep will release; below this is assumed to be someone else's. |
 | `LOG_LEVEL` | `DEBUG` | `TRACE`, `DEBUG`, `INFO`, `SUCCESS`, `WARNING`, `ERROR`, `CRITICAL`. |
@@ -261,6 +298,13 @@ paths rather than one per watch. A profile serves **one connection at a time** -
 and the second Chrome exits with code 21 (`The profile appears to be in use...`) - so size that
 set to your concurrency.
 
+On a shared pool you can take the choice away from the clients: `IGNORE_USER_DATA_DIR=true`
+drops any `--user-data-dir` on the connection URL (logged at DEBUG) and every connection gets
+the throwaway profile, as if none had been passed. Use it when you don't control every client's
+configuration - for example several clients built from one template, all sending the same path,
+which would otherwise turn into a stream of exit code 21 start failures whenever two of them
+overlap. Logins and cookies then don't carry over between connections.
+
 Sessions do survive a reused profile: on teardown the proxy SIGHUPs Chrome and gives it up to
 `CHROME_SHUTDOWN_GRACE` seconds to exit on its own, which is what makes it flush its cookie
 store and Local Storage. It normally takes ~0.2s. Without that Chrome gets SIGKILLed and
@@ -316,10 +360,65 @@ because they do not behave identically. Chromium 119's old `--headless` has no
 `chrome.json`'s seccomp profile has to suit both musl and glibc. To test another version:
 
 ```bash
-docker build -t sock:test --build-arg CHROME_VERSION=151.0.7922.173-1 .   # or "current"
+docker build -t sock:test --build-arg CHROME_VERSION=153.0.8010.36-1 .   # or "current"
 ```
 
-Google's deb pool only keeps recent releases, so old pins will 404.
+Google's deb pool only keeps recent releases, so old pins will 404. `CHROME_VERSION` is also
+declared in `docker-compose.yml` under `build.args`, so a pin can live there instead of on the
+command line. Either way `/stats` reports the version that actually got installed - see
+[`chrome_version`](#statistics) - so you never have to guess what `current` resolved to.
+
+### Fonts and fingerprinting
+
+The image ships Noto - `fonts-noto-core`, `fonts-noto-cjk`, `fonts-noto-color-emoji` - on top
+of `fonts-liberation`. Without them Chrome has no glyphs outside Latin/Cyrillic/Greek and any
+page in Chinese, Japanese, Korean, Arabic or Hebrew renders as a row of tofu boxes (`□□□`).
+That is silent corruption in the output that matters most here: a screenshot of tofu looks
+plausible, and a text diff of tofu is a diff of nothing.
+
+Fonts *are* a fingerprinting surface - a page cannot enumerate them, but it can probe for named
+families with `document.fonts.check()` or by measuring text in a canvas, and the set that comes
+back is high entropy. The thing to avoid, though, is being **unique**, not being **legible**:
+
+- Liberation alone is not anonymous, it is the signature of a bare headless-container Chrome.
+  Bot-detection vendors already score "desktop UA, almost no system fonts" as a bot signal.
+- Noto core + CJK + emoji is close to what a stock Debian or Ubuntu desktop installs, so it
+  lands in a large, real population of Linux Chrome users instead of a small one.
+- A bespoke handful of fonts is the worst of the three. Twenty fonts nobody else pairs together
+  identify you better than either extreme. If you add fonts, add whole distro font sets.
+
+One inconsistency worth knowing about: if you spoof a Windows `User-Agent`, a Linux font set
+contradicts it, and that mismatch is itself checkable. Matching it properly means Microsoft's
+core fonts, which are not redistributable in an image - so the options are to leave the UA
+alone, or to accept the mismatch.
+
+**Web fonts are off by default.** Chrome starts with `--disable-remote-fonts`, so a page's own
+`@font-face` fonts are never downloaded and text falls back to the system fonts above. That saves
+bandwidth and load time, and text content is unaffected - but **icon fonts** (Font Awesome,
+Material Icons and the like) have no system fallback and render as tofu boxes (`□`) in
+screenshots. Set `CHROME_DISABLE_REMOTE_FONTS=false` to let Chrome load web fonts, at the cost of a few more
+requests per page ([#66](https://github.com/dgtlmoon/sockpuppetbrowser/issues/66)).
+
+To add packages (fonts or anything else) without editing the `Dockerfile`, use the
+`EXTRA_LINUX_PACKAGES` build arg - it is wired up in `docker-compose.yml`:
+
+```bash
+docker build -t sock:test --build-arg EXTRA_LINUX_PACKAGES="fonts-noto-extra fonts-indic" .
+```
+
+It installs in its own layer, so changing it does not re-download Chrome. It is a *build*
+setting rather than a runtime environment variable on purpose: the container runs unprivileged
+as the `chrome` user, so nothing inside it can `apt-get install` at startup.
+
+### No compiler in the image
+
+The Python dependencies are installed with `--only-binary=:all:`. There is no `gcc`, no
+`libc6-dev` and no `python3-dev` - that toolchain was 261MB of image for packages that all
+publish wheels. If a dependency bump ever needs to build from source the build fails there,
+loudly, rather than quietly wanting a compiler back.
+
+The one that did need one was `psutil`: 5.9.x has no `aarch64` wheel, so every arm64 build
+compiled it. Hence `psutil>=6,<8` in `requirements.txt`.
 
 ### Docker healthcheck
 

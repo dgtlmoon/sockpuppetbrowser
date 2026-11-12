@@ -3,25 +3,11 @@
 # Auto scaling websocket proxy for Chrome CDP
 
 
-def strtobool(val):
-    """Convert a string representation of truth to true (1) or false (0).
-
-    True values are 'y', 'yes', 't', 'true', 'on', and '1'; false values
-    are 'n', 'no', 'f', 'false', 'off', and '0'.
-    """
-    val = val.lower()
-    if val in ('y', 'yes', 't', 'true', 'on', '1'):
-        return True
-    elif val in ('n', 'no', 'f', 'false', 'off', '0'):
-        return False
-    else:
-        raise ValueError(f"invalid truth value {val!r}")
-
-
 import argparse
 import asyncio
 import os
 import signal
+import subprocess
 import sys
 import time
 
@@ -30,10 +16,25 @@ from loguru import logger
 
 from cdp_trace import CDPTracer
 from chrome import (DEFAULT_CHROME_BIN, ChromeInstance, ChromeStartupError,
-                    parse_query_args, sweep_orphans)
+                    parse_query_args, probe_chrome_version, sweep_orphans)
 from http_server import start_http_server
+from strtobool import strtobool
+
+# CPython launches Chrome with vfork() when it can. While the child is between vfork() and
+# exec(), it shares the parent's memory, and with the executor threads busy (psutil, log
+# writes, sweeps) that is the suspected cause of the whole proxy aborting with "The futex facility
+# returned an unexpected error code" - taking every running browser with it. Plain fork()
+# avoids that and costs nothing noticeable (Chrome still starts in ~0.4s under load).
+# subprocess._USE_VFORK is a private CPython switch that exists in 3.11 - 3.13 only; on other
+# versions this does nothing and a warning is logged at startup.
+DISABLE_VFORK = strtobool(os.getenv('DISABLE_VFORK', 'True'))
+if DISABLE_VFORK and hasattr(subprocess, '_USE_VFORK'):
+    subprocess._USE_VFORK = False
 
 stats = {
+    # Filled in once at startup by probe_chrome_version(); None until then, and if the probe
+    # fails it stays None and /stats reports "unknown".
+    'chrome_version': None,
     'confirmed_data_received': 0,
     'connection_count': 0,
     'connection_count_total': 0,
@@ -41,6 +42,8 @@ stats = {
     'dropped_waited_too_long': 0,
     'special_counter': 0,
     'chrome_start_failures': 0,
+    'cdp_connect_failures': 0,
+    'quiet_sessions': 0,
 }
 
 connection_count_max = int(os.getenv('MAX_CONCURRENT_CHROME_PROCESSES', 10))
@@ -62,6 +65,11 @@ WS_PING_TIMEOUT = int(os.getenv('WS_PING_TIMEOUT', 20))
 # on a connection that is already finished. pyppeteer's browser.close() drops its socket
 # without a close frame, so this is the normal path, not an edge case.
 WS_CLOSE_TIMEOUT = int(os.getenv('WS_CLOSE_TIMEOUT', 5))
+
+# A session that relays less than this in total did no real work - a single Target.getTargets
+# round trip is already more than this - so it is counted separately from a failure. Set to 0
+# to stop counting.
+CDP_QUIET_SESSION_BYTES = int(os.getenv('CDP_QUIET_SESSION_BYTES', 100))
 
 # Bounded so a slow reader applies TCP backpressure instead of buffering screenshots in RAM.
 WS_MAX_QUEUE = int(os.getenv('WS_MAX_QUEUE', 128))
@@ -188,6 +196,7 @@ async def launchPuppeteerChromeProxy(websocket, path):
         logger.debug(
             f"WebSocket ID: {websocket.id} proxying to local Chrome instance via CDP {chrome.devtools_url}")
 
+        cdp_connected = False
         try:
             await debug_log_line(text=f"Attempting connection to {chrome.devtools_url}", logfile_path=debug_log)
             async with websockets.connect(chrome.devtools_url,
@@ -195,13 +204,25 @@ async def launchPuppeteerChromeProxy(websocket, path):
                                           max_queue=WS_MAX_QUEUE,
                                           ping_interval=WS_PING_INTERVAL,
                                           ping_timeout=WS_PING_TIMEOUT) as chrome_ws:
+                cdp_connected = True
                 await debug_log_line(text=f"Connected to {chrome.devtools_url}", logfile_path=debug_log)
                 await relay(client_ws=websocket, chrome_ws=chrome_ws, tracer=tracer, debug_log=debug_log)
         except Exception as e:
+            # Only a failure to attach counts: Chrome launched and announced an endpoint, then
+            # was gone or unreachable by the time we dialled it. An error raised once the relay
+            # is running is a different animal and the teardown summary covers it.
+            if not cdp_connected:
+                stats['cdp_connect_failures'] += 1
             txt = (f"Something bad happened when connecting to Chrome CDP at {chrome.devtools_url} "
                    f"- '{str(e)}'")
             logger.error(f"WebSocket ID: {websocket.id} - " + txt)
             await debug_log_line(text="Exception: " + txt, logfile_path=debug_log)
+
+        if cdp_connected and CDP_QUIET_SESSION_BYTES and tracer.quiet_session(CDP_QUIET_SESSION_BYTES):
+            stats['quiet_sessions'] += 1
+            logger.warning(
+                f"WebSocket ID: {websocket.id} - Connected to Chrome but only relayed "
+                f"{tracer.bytes_relayed} bytes; the client did nothing with the browser")
     finally:
         # If Chrome's side dropped first, wait briefly for the process exit to be observed so
         # the summary can say whether Chrome died or merely closed its socket.
@@ -344,6 +365,8 @@ async def main(args):
     except Exception as e:
         logger.warning(f"Startup sweep of orphaned temp dirs failed, continuing anyway: {e}")
 
+    stats['chrome_version'] = await probe_chrome_version()
+
     await start_http_server(host=args.host, port=args.sport, stats=stats)
 
     # max_size=None to match the Chrome side; the 1MiB default silently killed connections
@@ -355,7 +378,14 @@ async def main(args):
                                 ping_timeout=WS_PING_TIMEOUT,
                                 close_timeout=WS_CLOSE_TIMEOUT):
         chrome_path = os.getenv("CHROME_BIN", DEFAULT_CHROME_BIN)
-        logger.success(f"Starting Chrome proxy, Listening on ws://{args.host}:{args.port} -> {chrome_path}")
+        logger.success(f"Starting Chrome proxy, Listening on ws://{args.host}:{args.port} -> "
+                       f"{chrome_path} ({stats['chrome_version'] or 'version unknown'})")
+        if not hasattr(subprocess, '_USE_VFORK'):
+            logger.warning(f"DISABLE_VFORK={DISABLE_VFORK} has no effect: this Python ({sys.version.split()[0]}) "
+                           f"has no subprocess._USE_VFORK switch (it exists in 3.11 - 3.13)")
+        else:
+            logger.info(f"Chrome is launched with {'vfork()' if subprocess._USE_VFORK else 'fork()'} "
+                        f"(DISABLE_VFORK={DISABLE_VFORK})")
         poll = asyncio.create_task(stats_thread_func())
         try:
             await stop

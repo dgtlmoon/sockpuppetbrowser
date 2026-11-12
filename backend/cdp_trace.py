@@ -125,6 +125,10 @@ class CDPTracer:
         self.closes = {}            # side -> (code, reason, seconds since start)
         self.saw_special_counter = False
         self.client_asked_to_close = False   # saw Page.close / Target.closeTarget / Browser.close
+        # Bytes relayed each way. A session that connects and then exchanges almost nothing
+        # looks healthy in the connection count but did no work - see quiet_session().
+        self.bytes_from_client = 0
+        self.bytes_from_chrome = 0
 
     # -- helpers ---------------------------------------------------------
 
@@ -138,10 +142,25 @@ class CDPTracer:
 
     # -- client -> chrome ------------------------------------------------
 
+    @property
+    def bytes_relayed(self):
+        return self.bytes_from_client + self.bytes_from_chrome
+
+    def quiet_session(self, minimum):
+        """Did this session carry less than `minimum` bytes in total?
+
+        A real CDP session runs to kilobytes - a single Target.getTargets round trip is already
+        more than a hundred bytes - so anything under that means the client connected and then
+        did nothing, or Chrome answered nothing. Worth counting separately from a failure,
+        because from the outside it looks like a perfectly ordinary connection.
+        """
+        return self.bytes_relayed < minimum
+
     def on_client_message(self, message):
         """Inspect a command heading for Chrome. Never raises."""
         try:
             raw = _as_bytes(message)
+            self.bytes_from_client += len(raw)
             if len(raw) > BIG_COMMAND:
                 # Big payload (setDocumentContent, insertText...) - scan the head only.
                 match = METHOD_RE.search(raw[:HEAD])
@@ -181,6 +200,7 @@ class CDPTracer:
         """Inspect a response or event coming back from Chrome. Never raises."""
         try:
             raw = _as_bytes(message)
+            self.bytes_from_chrome += len(raw)
             head = raw[:HEAD]
 
             match = RESPONSE_ID_RE.match(head)
@@ -311,6 +331,8 @@ class CDPTracer:
         if self.failed_commands:
             parts.append(f"{len(self.failed_commands)} command(s) returned a CDP error: "
                          + ", ".join(self.failed_commands[:5]))
+
+        parts.append(f"relayed {self.bytes_from_client} bytes in, {self.bytes_from_chrome} out")
 
         if chrome is not None:
             parts.append(chrome.describe_exit())

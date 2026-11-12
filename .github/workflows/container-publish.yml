@@ -6,15 +6,18 @@ on:
       - master
   release:
     types: [published, edited]
+  # Manual re-run from the Actions tab or `gh workflow run container-publish.yml`, e.g. when a
+  # push-triggered run gets stuck on GitHub's side.
+  workflow_dispatch:
     
 jobs:
 
   docker-build-setup:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - name: Set up Python 3.11
-        uses: actions/setup-python@v6
+        uses: actions/setup-python@v7
         with:
           python-version: 3.11
 
@@ -28,7 +31,6 @@ jobs:
         id: buildx
         uses: docker/setup-buildx-action@v4
         with:
-          install: true
           version: latest
           driver-opts: image=moby/buildkit:master
 
@@ -36,9 +38,9 @@ jobs:
     needs: [docker-build-setup]
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - name: Set up Python 3.11
-        uses: actions/setup-python@v6
+        uses: actions/setup-python@v7
         with:
           python-version: 3.11
 
@@ -52,7 +54,6 @@ jobs:
         id: buildx
         uses: docker/setup-buildx-action@v4
         with:
-          install: true
           version: latest
           driver-opts: image=moby/buildkit:master
       - name: Build container for test
@@ -73,9 +74,9 @@ jobs:
     needs: [build-container-test]
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - name: Set up Python 3.11
-        uses: actions/setup-python@v6
+        uses: actions/setup-python@v7
         with:
           python-version: 3.11
 
@@ -89,7 +90,6 @@ jobs:
         id: buildx
         uses: docker/setup-buildx-action@v4
         with:
-          install: true
           version: latest
           driver-opts: image=moby/buildkit:master
       - name: Login to Docker Hub Container Registry
@@ -115,7 +115,7 @@ jobs:
       # master branch -> :latest container tag
       - name: Build and push :latest
         id: docker_build_latest
-        if: ${{ github.ref }} == "refs/heads/master"
+        if: (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && github.ref == 'refs/heads/master'
         uses: docker/build-push-action@v7
         with:
           context: ./
@@ -128,5 +128,8 @@ jobs:
           cache-to: type=gha,mode=max
 
       - name: Image digest
-        run: echo step SHA ${{ steps.vars.outputs.sha_short }} tag ${{steps.vars.outputs.tag}} branch ${{steps.vars.outputs.branch}} digest ${{ steps.docker_build.outputs.digest }}
+        run: |
+          echo "ref=${{ github.ref }} sha=${{ github.sha }}"
+          echo "release digest=${{ steps.docker_build.outputs.digest }}"
+          echo ":latest digest=${{ steps.docker_build_latest.outputs.digest }}"
 

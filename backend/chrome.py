@@ -29,6 +29,8 @@ from urllib.parse import parse_qs, urlparse
 import psutil
 from loguru import logger
 
+from strtobool import strtobool
+
 # "DevTools listening on ws://127.0.0.1:36743/devtools/browser/9cc0662e-..."
 DEVTOOLS_RE = re.compile(r'DevTools listening on (ws://\S+)')
 
@@ -54,6 +56,19 @@ DEFAULT_CHROME_BIN = (r'C:\Program Files\Google\Chrome\Application\chrome.exe' i
 # Where the per-connection scratch dirs go. In the docker image this is usually a tmpfs/ramdisk;
 # off-container, whatever the platform calls its temp dir.
 TEMP_ROOT = os.getenv('SOCKPUPPET_TEMP_ROOT', tempfile.gettempdir() if WINDOWS else '/tmp')
+
+# Drop any --user-data-dir the client puts on the connection URL, so every connection gets the
+# throwaway per-connection profile. For shared/multi-tenant pools: clients that hand out the same
+# path to two connections at once make the second Chrome exit with code 21 (profile in use), and
+# per-client paths are never cleaned up, so they pile up on the tmpfs. Enforced here, it no
+# longer depends on every client being configured right.
+IGNORE_USER_DATA_DIR = strtobool(os.getenv('IGNORE_USER_DATA_DIR', 'False'))
+
+# --disable-remote-fonts stops pages downloading their @font-face web fonts - less bandwidth and
+# faster page loads, but icon fonts (Font Awesome and friends) then render as tofu boxes in
+# screenshots. Set false to let Chrome load web fonts.
+# https://github.com/dgtlmoon/sockpuppetbrowser/issues/66
+CHROME_DISABLE_REMOTE_FONTS = strtobool(os.getenv('CHROME_DISABLE_REMOTE_FONTS', 'True'))
 
 # Prefix of the one dir we create per browser. Both the profile and Chrome's own TMPDIR live
 # inside it, so a single rmtree at teardown gets everything Chrome put in temp.
@@ -112,6 +127,44 @@ BENIGN_STDERR = (
 def _is_benign(line):
     return any(marker in line for marker in BENIGN_STDERR)
 
+
+async def probe_chrome_version(timeout=10):
+    """Ask the browser binary what it is, e.g. "Google Chrome 141.0.7390.65".
+
+    Deliberately probed from the binary rather than read off the CHROME_VERSION build arg:
+    that arg defaults to "current", which says nothing about what actually got installed, and
+    it is stale the moment someone mounts a different browser over /usr/bin or runs the proxy
+    off-container. Called once at startup - /stats must not fork a browser per request.
+
+    Returns None rather than raising: not knowing the version is never a reason to refuse to
+    start, and the caller reports it as "unknown".
+    """
+    chrome_location = os.getenv("CHROME_BIN", DEFAULT_CHROME_BIN)
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            chrome_location, '--version', stdout=PIPE, stderr=DEVNULL)
+    except (OSError, ValueError) as e:
+        logger.warning(f"Could not run '{chrome_location} --version': {e}")
+        return None
+
+    try:
+        stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=timeout)
+    except asyncio.TimeoutError:
+        logger.warning(f"'{chrome_location} --version' did not answer within {timeout}s")
+        try:
+            proc.kill()
+            await proc.wait()  # reap it, or it lingers as a zombie on our PID
+        except (ProcessLookupError, OSError):
+            pass
+        return None
+
+    version = stdout.decode('utf-8', errors='replace').strip()
+    if proc.returncode != 0 or not version:
+        logger.warning(f"'{chrome_location} --version' exited {proc.returncode} "
+                       f"with output {version!r}")
+        return None
+    return version
+
 XVFB_SCREEN_ARGS = (
     "-screen 0 1920x1080x24 -ac +extension GLX +extension RANDR +extension RENDER "
     "+extension DAMAGE +extension XINERAMA +extension MIT-SHM +extension XTEST "
@@ -160,7 +213,7 @@ def build_chrome_args(chrome_flags, headful=False):
         "--disable-ipc-flooding-protection",
         "--disable-popup-blocking",
         "--disable-prompt-on-repost",
-        "--disable-remote-fonts",
+        "--disable-remote-fonts",  # unless CHROME_DISABLE_REMOTE_FONTS=false, see below
         "--disable-renderer-backgrounding",
         "--disable-search-engine-choice-screen",
         "--disable-sync",
@@ -185,6 +238,9 @@ def build_chrome_args(chrome_flags, headful=False):
         "about:blank",
     ]
 
+    if not CHROME_DISABLE_REMOTE_FONTS:
+        chrome_run.remove("--disable-remote-fonts")
+
     if not headful:
         chrome_run.append("--headless")
     else:
@@ -204,6 +260,12 @@ def build_chrome_args(chrome_flags, headful=False):
                      "--enable-blink-features=IdleDetection"):
             if flag in chrome_run:
                 chrome_run.remove(flag)
+
+    if IGNORE_USER_DATA_DIR:
+        ignored = [f for f in chrome_flags if f.split('=', 1)[0] == '--user-data-dir']
+        if ignored:
+            logger.debug(f"IGNORE_USER_DATA_DIR is set, ignoring client supplied {', '.join(ignored)} - using a throwaway profile")
+            chrome_flags = [f for f in chrome_flags if f.split('=', 1)[0] != '--user-data-dir']
 
     chrome_run += chrome_flags
 
