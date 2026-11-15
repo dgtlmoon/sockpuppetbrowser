@@ -73,7 +73,8 @@ CHROME_DISABLE_REMOTE_FONTS = strtobool(os.getenv('CHROME_DISABLE_REMOTE_FONTS',
 # --disable-web-security switches off Chrome's cross-origin rules: page script may read responses
 # from any host. It also stops Chrome sending the Origin header on cross-origin requests, and an
 # API that checks Origin then refuses the page's own calls (seen as a 401 and an empty page).
-# Set false to run Chrome with its normal cross-origin behaviour.
+# Set false to run Chrome with its normal cross-origin behaviour - that also drops a
+# --disable-web-security the client puts on the connection URL, so it holds for every client.
 CHROME_DISABLE_WEB_SECURITY = strtobool(os.getenv('CHROME_DISABLE_WEB_SECURITY', 'True'))
 
 # Prefix of the one dir we create per browser. Both the profile and Chrome's own TMPDIR live
@@ -275,6 +276,13 @@ def build_chrome_args(chrome_flags, headful=False):
         if ignored:
             logger.debug(f"IGNORE_USER_DATA_DIR is set, ignoring client supplied {', '.join(ignored)} - using a throwaway profile")
             chrome_flags = [f for f in chrome_flags if f.split('=', 1)[0] != '--user-data-dir']
+
+    if not CHROME_DISABLE_WEB_SECURITY:
+        # Clients often send the flag themselves on the connection URL, which would put it straight back
+        ignored = [f for f in chrome_flags if f.split('=', 1)[0] == '--disable-web-security']
+        if ignored:
+            logger.debug(f"CHROME_DISABLE_WEB_SECURITY is false, ignoring client supplied {', '.join(ignored)}")
+            chrome_flags = [f for f in chrome_flags if f.split('=', 1)[0] != '--disable-web-security']
 
     chrome_run += chrome_flags
 
