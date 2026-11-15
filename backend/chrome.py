@@ -70,6 +70,12 @@ IGNORE_USER_DATA_DIR = strtobool(os.getenv('IGNORE_USER_DATA_DIR', 'False'))
 # https://github.com/dgtlmoon/sockpuppetbrowser/issues/66
 CHROME_DISABLE_REMOTE_FONTS = strtobool(os.getenv('CHROME_DISABLE_REMOTE_FONTS', 'True'))
 
+# --disable-web-security switches off Chrome's cross-origin rules: page script may read responses
+# from any host. It also stops Chrome sending the Origin header on cross-origin requests, and an
+# API that checks Origin then refuses the page's own calls (seen as a 401 and an empty page).
+# Set false to run Chrome with its normal cross-origin behaviour.
+CHROME_DISABLE_WEB_SECURITY = strtobool(os.getenv('CHROME_DISABLE_WEB_SECURITY', 'True'))
+
 # Prefix of the one dir we create per browser. Both the profile and Chrome's own TMPDIR live
 # inside it, so a single rmtree at teardown gets everything Chrome put in temp.
 TEMP_DIR_PREFIX = 'chrome-puppeteer-proxy'
@@ -217,7 +223,7 @@ def build_chrome_args(chrome_flags, headful=False):
         "--disable-renderer-backgrounding",
         "--disable-search-engine-choice-screen",
         "--disable-sync",
-        "--disable-web-security=true",
+        "--disable-web-security=true",  # unless CHROME_DISABLE_WEB_SECURITY=false, see below
         #        "--enable-automation", # Leave out off the notification that the browser is driven by automation
         "--enable-blink-features=IdleDetection",
         "--enable-features=NetworkServiceInProcess2",
@@ -240,6 +246,9 @@ def build_chrome_args(chrome_flags, headful=False):
 
     if not CHROME_DISABLE_REMOTE_FONTS:
         chrome_run.remove("--disable-remote-fonts")
+
+    if not CHROME_DISABLE_WEB_SECURITY:
+        chrome_run.remove("--disable-web-security=true")
 
     if not headful:
         chrome_run.append("--headless")
