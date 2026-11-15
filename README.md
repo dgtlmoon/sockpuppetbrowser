@@ -175,6 +175,7 @@ You can also add this to your fetch and access `'special_counter_len'` at the `/
 | `CDP_QUIET_SESSION_BYTES` | `100` | A session relaying fewer bytes than this counts as `quiet_sessions` in `/stats`. `0` disables the check. |
 | `SOCKPUPPET_TEMP_ROOT` | `/tmp` | Where each browser's scratch dir (profile + Chrome's own `TMPDIR`) is created. |
 | `CHROME_DISABLE_REMOTE_FONTS` | `true` | Start Chrome with `--disable-remote-fonts`, so pages' `@font-face` web fonts are not downloaded. `false` loads them - needed for icon fonts in screenshots. See [Fonts and fingerprinting](#fonts-and-fingerprinting). |
+| `CHROME_DISABLE_WEB_SECURITY` | `true` | Start Chrome with `--disable-web-security`, which switches off its cross-origin rules. `false` gives normal browser behaviour - needed for sites whose API checks the `Origin` header, which Chrome stops sending with the flag on. |
 | `IGNORE_USER_DATA_DIR` | `false` | `true` drops any `--user-data-dir` the client sends, so every connection gets a throwaway profile. See [Profile directories](#profile-directories---user-data-dir). |
 | `DISABLE_VFORK` | `true` | Launch Chrome with `fork()` instead of `vfork()`. Under heavy load `vfork()` is the suspected cause of the whole proxy aborting with *"The futex facility returned an unexpected error code"*, dropping every connected browser. `false` restores Python's default. |
 | `SOCKPUPPET_SWEEP_MIN_AGE` | `300` | Seconds before an unclaimed scratch dir or X lock is treated as an orphan. |
