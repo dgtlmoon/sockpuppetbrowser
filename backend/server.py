@@ -16,7 +16,8 @@ from loguru import logger
 
 from cdp_trace import CDPTracer
 from chrome import (DEFAULT_CHROME_BIN, ChromeInstance, ChromeStartupError,
-                    parse_query_args, probe_chrome_version, sweep_orphans)
+                    chrome_is_headless_only, parse_query_args, probe_chrome_version,
+                    sweep_orphans)
 from http_server import start_http_server
 from strtobool import strtobool
 
@@ -172,6 +173,12 @@ async def launchPuppeteerChromeProxy(websocket, path):
     chrome_flags, options = parse_query_args(path)
     headful = (options.get('headful', '').lower() in ('true', '1')
                or os.getenv('CHROME_HEADFUL', 'false').lower() in ('true', '1'))
+    if headful and chrome_is_headless_only():
+        # chrome-headless-shell cannot open a window. Serving the page headless beats failing
+        # the connection - the client still gets its content.
+        logger.warning(f"WebSocket ID: {websocket.id} - headful mode was requested but "
+                       f"chrome-headless-shell has no headful mode, running headless")
+        headful = False
 
     debug_log = options.get('log-cdp') if options.get('log-cdp') and strtobool(os.getenv('ALLOW_CDP_LOG', 'False')) else None
     if debug_log and os.path.isfile(debug_log):

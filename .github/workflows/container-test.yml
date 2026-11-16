@@ -27,6 +27,10 @@ jobs:
           - label: chrome-151
             dockerfile: ./Dockerfile
             chrome-version: 151.0.7922.173-1
+          # chrome-headless-shell from Chrome for Testing, current Stable.
+          - label: chrome-headless-shell
+            dockerfile: ./Dockerfile.chrome-headless-shell
+            chrome-version: current
           # The image sockpuppetbrowser shipped for years, still widely deployed.
           - label: chromium-119
             dockerfile: ./Dockerfile.chromium119

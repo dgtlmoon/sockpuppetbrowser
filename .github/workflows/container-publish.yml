@@ -4,6 +4,8 @@ on:
   push:
     branches:
       - master
+      # Builds Dockerfile.chrome-headless-shell and pushes it as :chrome-headless-shell only
+      - chrome-headless-shell
   release:
     types: [published, edited]
   # Manual re-run from the Actions tab or `gh workflow run container-publish.yml`, e.g. when a
@@ -61,7 +63,7 @@ jobs:
         uses: docker/build-push-action@v7
         with:
           context: ./
-          file: ./Dockerfile
+          file: ${{ github.ref == 'refs/heads/chrome-headless-shell' && './Dockerfile.chrome-headless-shell' || './Dockerfile' }}
           push: false
           tags: testsock
           platforms: linux/amd64,linux/arm64
@@ -127,9 +129,25 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
+      # chrome-headless-shell branch -> :chrome-headless-shell tag (never :latest)
+      - name: Build and push :chrome-headless-shell
+        id: docker_build_headless_shell
+        if: (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && github.ref == 'refs/heads/chrome-headless-shell'
+        uses: docker/build-push-action@v7
+        with:
+          context: ./
+          file: ./Dockerfile.chrome-headless-shell
+          push: true
+          tags: |
+            ${{ secrets.DOCKER_HUB_USERNAME }}/sockpuppetbrowser:chrome-headless-shell
+          platforms: linux/amd64,linux/arm64
+          cache-from: type=gha,scope=chrome-headless-shell
+          cache-to: type=gha,mode=max,scope=chrome-headless-shell
+
       - name: Image digest
         run: |
           echo "ref=${{ github.ref }} sha=${{ github.sha }}"
           echo "release digest=${{ steps.docker_build.outputs.digest }}"
           echo ":latest digest=${{ steps.docker_build_latest.outputs.digest }}"
+          echo ":chrome-headless-shell digest=${{ steps.docker_build_headless_shell.outputs.digest }}"
 

@@ -100,6 +100,96 @@ docker run --rm --init -e CHROME_HEADFUL=true --security-opt seccomp=$(pwd)/chro
 - Headless mode: ~150+ concurrent browsers per 16-core CPU
 - Headful mode: Slightly higher memory usage due to Xvfb processes, but still scales well
 
+### chrome-headless-shell image (experimental)
+
+`dgtlmoon/sockpuppetbrowser:chrome-headless-shell` is the same proxy with
+[chrome-headless-shell](https://developer.chrome.com/blog/chrome-headless-shell) from Chrome for
+Testing in place of the full `google-chrome-stable`, built from `Dockerfile.chrome-headless-shell`.
+
+Full Chrome in `--headless` mode still builds its whole browser UI behind the scenes - the omnibox
+popup, built-in extensions and so on show up as extra targets in a CDP trace. The headless shell
+has none of that, so it starts faster and uses less memory and CPU per browser. The image is
+about half the size (~620MB vs ~1.2GB).
+
+Benchmark, `:latest` (Chrome 157 full, `--headless`) against `:chrome-headless-shell` (Chrome for
+Testing 157): a fixed number of clients fetch https://changedetection.io back to back for 2
+minutes, each fetch a fresh browser + page load + full-page JPEG screenshot. 16 thread laptop,
+container limited to 10GB, both images CPU-bound (~13 of 16 threads busy). Each figure is the
+mean of two runs (order latest, shell, shell, latest); runs agreed within 1-8%. No errors,
+restarts or Chrome start failures in any run.
+
+| 12 concurrent | `:latest` | `:chrome-headless-shell` | |
+|---|---|---|---|
+| Fetches per minute | 255 | **397** | +56% |
+| CPU seconds per fetch | 3.13 | **1.74** | -44% |
+| Fetch time, median / p95 | 2.78s / 3.08s | **1.77s / 2.05s** | -36% |
+| Browser start (connect) median | 0.48s | **0.09s** | 5x faster |
+| Peak memory per browser | 272MB | **169MB** | -38% |
+
+| 30 concurrent | `:latest` | `:chrome-headless-shell` | |
+|---|---|---|---|
+| Fetches per minute | 232 | **428** | +85% |
+| CPU seconds per fetch | 3.44 | **1.88** | -45% |
+| Fetch time, median / p95 | 7.26s / 9.16s | **4.05s / 4.95s** | -44% |
+| Browser start (connect) median | 1.51s | **0.35s** | 4x faster |
+| Peak memory per browser | 259MB | **152MB** | -41% |
+
+One page on one machine - real traffic is a mix of sites, so measure on your own load too.
+
+**Faster, but easier to spot as a bot.** Same rendering engine, so pages, web fonts (with
+`CHROME_DISABLE_REMOTE_FONTS=false`), codecs (H.264/AAC/VP9/AV1) and WebGL behave the same. What
+differs is what the browser reports about itself, measured on both images:
+
+| Check | `:latest` (full Chrome) | `:chrome-headless-shell` |
+|---|---|---|
+| `window.chrome` | present | **missing** |
+| `navigator.plugins` | 5 PDF viewer plugins | **empty** |
+| `navigator.pdfViewerEnabled` | `true` | **`false`** |
+| `Notification.permission` | `"default"` | **`"denied"`** |
+| `navigator.userAgentData` brand | "Google Chrome" | **"HeadlessChrome"** |
+| User-Agent version | `157.0.0.0` (reduced, like normal Chrome) | **`157.0.8103.78`** (full) |
+| `navigator.languages` | `en-US, en` | `en-US` |
+| Navigating to a PDF | loads (HTTP 200) | **`net::ERR_ABORTED`** |
+
+- **Bot detection is the big risk.** A missing `window.chrome`, no plugins and notifications
+  "denied" are long-standing headless giveaways that Cloudflare, DataDome and friends check for,
+  so sites behind them will likely block the shell more often than full Chrome.
+  - Both images put "HeadlessChrome" in the User-Agent string, so a client that sets its own
+    User-Agent hides that either way - but the shell's `navigator.userAgentData` brand still
+    says "HeadlessChrome".
+- **PDFs fail.** The shell has no PDF viewer, so loading a PDF URL in the browser aborts.
+- **Patching is possible but endless.** A fake `window.chrome`, plugins etc. can be injected
+  before each page loads, but that is cat-and-mouse; full Chrome passes these checks as is.
+
+Compare block and error rates on your own traffic before switching a pool over.
+
+**Can a page tell it is being driven over CDP?** This part is the same for both images - it
+depends on the client library, not the browser. Checked with a test page on Chrome 157 through
+Playwright 1.65 (`connect_over_cdp`, as changedetection.io connects), pyppeteer-ng 2.0, and a bare
+CDP client as baseline:
+
+| Giveaway | Result |
+|---|---|
+| `navigator.webdriver` | `false` for every client - the proxy omits `--enable-automation` and sets `--disable-blink-features=AutomationControlled` |
+| `window.cdc_*` variables | not present - those come from Selenium's ChromeDriver, which is not involved |
+| Helper globals on `window` (`__playwright*`, `__pw*`, `*puppeteer*`) | none found |
+| `Runtime.enable` leak (`console.debug()` of an `Error` with a `stack` getter, or of a `Proxy` with an `ownKeys` trap) | did **not** trigger for any client, including a bare CDP client that enables `Runtime` on purpose - these two published variants no longer work in Chrome 157 (others may exist) |
+| Stack traces of code the client runs in the page | **visible**: Playwright's `page.evaluate()` shows up as `UtilityScript.evaluate`, pyppeteer's as `__pyppeteer_evaluation_script__`. A page that wraps a getter the client touches (e.g. `document.title`) can read these |
+
+So the stack trace is the giveaway left at the protocol level, and only for code the client
+runs in the page's own context. Clients like `patchright` / `rebrowser-patches` work on exactly
+this - a change on the client side, since the proxy only passes CDP through.
+
+Also:
+
+- **No headful mode.** `headful=true` and `CHROME_HEADFUL=true` are ignored with a warning and the
+  connection runs headless instead of failing.
+- `CHROME_VERSION` takes a Chrome for Testing version (e.g. `157.0.8103.78`) or `current`.
+
+```bash
+docker build -f Dockerfile.chrome-headless-shell -t sockpuppetbrowser:chrome-headless-shell .
+```
+
 ### Statistics
 
 Access `http://127.0.0.1:8080/stats` or which ever hostname you bind to, use `--sport` to specify something other than `8080`
